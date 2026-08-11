@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package protogen.it.optin;
+
+option java_multiple_files = true;
+option java_package = "protogen.it.optin.model";
+
+/**
+ * Generated with `preserveUnknownFields` on and `emitValidation` off, to exercise both opt-ins.
+ *
+ * A relay owns only part of the schema: it reads the fields it knows, leaves the rest untouched, and
+ * forwards the message on. Without unknown-field preservation the fields it does not know would be
+ * silently dropped on the way through.
+ *
+ * @RootNode
+ */
+message RelayedMessageV1 {
+  // @Example order-4711
+  string correlationId = 1;
+
+  // The relay routes on this and nothing else.
+  // @Example tms.orders.v1
+  string topic = 2;
+
+  /*
+   * A constraint that is deliberately NOT enforced here: this source root is generated with
+   * emitValidation = false, so the check is absent from the generated record entirely.
+   *
+   * @MinLength 8
+   */
+  string tenant = 3;
+
+  int64 sequence = 4;
+}
+
+/**
+ * A message with no constraints at all, to keep the unknown-field tests independent of validation.
+ */
+message EnvelopeV1 {
+  string id = 1;
+  bytes payload = 2;
+}

@@ -21,13 +21,119 @@ class JavaGeneratorTest {
     private static final ProtoCompiler COMPILER = new ProtoCompiler(ProtoCompiler.Options.defaults());
 
     private static Map<String, String> generate(String... sources) {
+        return generate(ProtoCompiler.Options.defaults(), sources);
+    }
+
+    private static Map<String, String> generate(ProtoCompiler.Options options, String... sources) {
+        ProtoCompiler compiler = new ProtoCompiler(options);
         List<ProtoFile> files = new java.util.ArrayList<>();
         for (int i = 0; i < sources.length; i++) {
-            files.add(COMPILER.parse("file" + i + ".proto", sources[i]));
+            files.add(compiler.parse("file" + i + ".proto", sources[i]));
         }
-        return COMPILER.generate(COMPILER.link(files)).stream()
+        return compiler.generate(compiler.link(files)).stream()
                 .collect(Collectors.toMap(JavaGenerator.GeneratedFile::relativePath,
                         JavaGenerator.GeneratedFile::content));
+    }
+
+    private static ProtoCompiler.Options with(boolean unknownFields, boolean validation, boolean metadata) {
+        return new ProtoCompiler.Options(null, true, true, unknownFields, validation, metadata);
+    }
+
+    private static final String CONSTRAINED = """
+            syntax = "proto3";
+            option java_multiple_files = true;
+            option java_package = "x";
+            /**
+             * @RootNode
+             */
+            message M {
+              /*
+               * @MinLength 3
+               * @Example abcdef
+               */
+              string s = 1;
+            }
+            """;
+
+    // ------------------------------------------------------ the three opt-ins
+
+    @Test
+    void unknownFieldPreservationIsOffByDefault() {
+        String source = generate(CONSTRAINED).get("x/M.java");
+
+        assertThat(source).doesNotContain("unknownFields");
+        assertThat(generate(CONSTRAINED).get("x/ProtoWire.java"))
+                .doesNotContain("copyField").doesNotContain("static final class U");
+    }
+
+    @Test
+    void unknownFieldPreservationAddsATrailingComponentAndTheCaptureHelpers() {
+        Map<String, String> out = generate(with(true, true, true), CONSTRAINED);
+
+        assertThat(out.get("x/M.java"))
+                .contains("byte[] unknownFields)")
+                .contains("ProtoWire.U unknownFields = null;")
+                .contains("copyField(tag, unknownFields)");
+        assertThat(out.get("x/ProtoWire.java"))
+                .contains("U copyField(int tag, U sink)")
+                .contains("static final class U");
+    }
+
+    @Test
+    void validationIsGeneratedByDefaultBehindARuntimeSwitch() {
+        String source = generate(CONSTRAINED).get("x/M.java");
+
+        assertThat(source)
+                .contains("private static final boolean PROTOGEN_VALIDATION")
+                .contains("if (PROTOGEN_VALIDATION) {")
+                .contains("@MinLength 3");
+    }
+
+    @Test
+    void validationCanBeLeftOutEntirelyAtGenerationTime() {
+        String source = generate(with(false, false, true), CONSTRAINED).get("x/M.java");
+
+        assertThat(source)
+                .doesNotContain("PROTOGEN_VALIDATION")
+                .doesNotContain("throw new IllegalArgumentException")
+                .doesNotContain("@MinLength");
+    }
+
+    @Test
+    void metadataSidecarCarriesExamplesAndRootNode() {
+        Map<String, String> out = generate(CONSTRAINED);
+
+        String json = out.get("META-INF/protogen/file0.json");
+        assertThat(json).isNotNull();
+        assertThat(json)
+                .contains("\"rootNode\": true")
+                .contains("\"abcdef\"")
+                .contains("\"minLength\": 3")
+                .contains("\"javaType\": \"x.M\"");
+    }
+
+    @Test
+    void theMetadataSidecarIsAResourceNotASource() {
+        ProtoCompiler compiler = new ProtoCompiler(ProtoCompiler.Options.defaults());
+        List<ProtoFile> files = List.of(compiler.parse("file0.proto", CONSTRAINED));
+
+        List<JavaGenerator.GeneratedFile> generated = compiler.generate(compiler.link(files));
+
+        assertThat(generated)
+                .filteredOn(f -> f.relativePath().endsWith(".json"))
+                .singleElement()
+                .extracting(JavaGenerator.GeneratedFile::kind)
+                .isEqualTo(JavaGenerator.Kind.RESOURCE);
+        assertThat(generated)
+                .filteredOn(f -> f.relativePath().endsWith(".java"))
+                .allSatisfy(f -> assertThat(f.kind()).isEqualTo(JavaGenerator.Kind.SOURCE));
+    }
+
+    @Test
+    void metadataCanBeSwitchedOff() {
+        Map<String, String> out = generate(with(false, true, false), CONSTRAINED);
+
+        assertThat(out).doesNotContainKey("META-INF/protogen/file0.json");
     }
 
     @Test

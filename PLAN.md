@@ -85,8 +85,8 @@ public record NodeV1(
 
 ### Known v1 limitations
 
-* **Unknown fields are dropped**, not preserved. A record carries only its declared components; keeping a
-  trailing raw buffer would put an artificial component into every constructor and every `equals`.
+* **Unknown fields are dropped by default**, because preserving them puts an extra component into every
+  constructor and every `equals`. Turn on `preserveUnknownFields` where it matters — see §6.
 * **An unknown enum value becomes `UNRECOGNIZED`** and is not re-encoded. `protoc` keeps the raw number.
 * **`protoSize()` is recomputed** rather than memoised, because a record has no mutable field to cache in.
   Serializing a tree of depth *d* walks it *d* times. Phase 6 revisits this if benchmarks justify it.
@@ -128,6 +128,52 @@ compact constructor, so an invalid message cannot be constructed — by hand or 
 field, so a constraint on such a field is enforced on *every* instance — it effectively becomes required.
 Put the constraint on an `optional` field when it should apply only when the value is set. Both behaviours
 are pinned in `ValidationTest`.
+
+## 5a. The three opt-ins
+
+### Unknown-field preservation (`preserveUnknownFields`, default off)
+
+A relay reads the fields it owns and forwards the message on; without preservation everything its build
+has never heard of is silently dropped in transit. With the flag on, each record gains a trailing
+`byte[] unknownFields` component: unrecognised tags are copied **verbatim**, appended after the known
+fields on write, and included in `equals`/`hashCode`/`toString`. A round trip is byte-exact and stable.
+
+It stays off by default because that component is visible in every constructor call and every diff — a
+real cost to pay only where relaying happens. The codec helpers it needs (`copyField` and a growable
+buffer) are emitted only when it is on, per the pruning rule.
+
+`protogen-it/src/main/proto-optin` plus the `generate-opt-ins` execution in that module's pom is the
+worked example.
+
+### Validation: two switches
+
+| Switch | Where | Default | Effect |
+|---|---|---|---|
+| `emitValidation` | Mojo, generation time | `true` | whether the checks exist in the bytecode at all |
+| `-Dprotogen.validation=false` | JVM, runtime | on | folds the generated checks away without regenerating |
+
+The runtime switch is a `static final boolean` read once at class initialisation, so when it is off the
+JIT removes the checks entirely — there is no per-message cost for carrying the capability. Only an
+explicit `false` disables it, so a typo in the property leaves validation running rather than silently
+turning it off.
+
+The runtime switch is what makes a **lenient parse** possible: point a migration job at
+`-Dprotogen.validation=false` to read legacy data that predates a constraint, without regenerating and
+without weakening the constraint for everyone else. Records cannot bypass their canonical constructor, so
+parse and construction necessarily share the switch — this is the honest way to offer leniency.
+
+Oneof invariants are **not** covered by either switch: "at most one member set" is structural correctness,
+not schema validation, and is always enforced.
+
+### `@Example` / `@RootNode` → documentation metadata (`emitSchemaMetadata`, default on)
+
+These two annotations are documentation, not behaviour, so they do not belong in the generated runtime.
+Each `.proto` gets a JSON sidecar at `META-INF/protogen/<file>.json` in the generated **resources**,
+recording per message: `rootNode`, prose documentation, Java type name; and per field: number, proto type,
+label, examples, and every constraint. A documentation pipeline can read it off the classpath without
+re-parsing the schema or reflecting over the classes, while the records stay free of tooling-only members.
+
+The JSON is written by hand — `protogen-compiler` still has no dependencies.
 
 ## 6. Front-end
 
@@ -177,6 +223,10 @@ Goal `protogen:generate`, default phase `generate-sources`.
 | `outputDirectory` | `${project.build.directory}/generated-sources/protogen` | output, auto-added as a compile source root |
 | `javaPackage` | from `option java_package` | override |
 | `emitJavadoc` | `true` | comment retention |
+| `preserveUnknownFields` | `false` | keep unknown fields in a trailing component (§5a) |
+| `emitValidation` | `true` | generate the schema's constraint checks (§5a) |
+| `emitSchemaMetadata` | `true` | write the `@Example` / `@RootNode` JSON sidecar (§5a) |
+| `resourceOutputDirectory` | `${project.build.directory}/generated-resources/protogen` | where the sidecars land; added as a project resource |
 | `failOnUnsupported` | `true` | |
 | `skip` | `false` | |
 
@@ -217,14 +267,15 @@ Measured results and how to read them: [BENCHMARKS.md](BENCHMARKS.md).
 
 ## 10. Open questions
 
-1. **Unknown-field preservation** — worth an opt-in that adds a trailing component, or is dropping them the
-   right trade for record cleanliness?
+1. ~~**Unknown-field preservation**~~ — **done**, as an opt-in (§5a). Still open: a differential test that
+   has `protoc` produce the unknown fields from a genuine v2 schema, rather than the hand-built wire bytes
+   the current test uses.
 2. ~~**`protoSize()` memoisation**~~ — **answered by measurement.** It costs nothing at depth 1, 1.5× at
    depth 3 and 2.1× at depth 5 when the same instance is serialized repeatedly, and nothing at all when a
    message is serialized once. Worth fixing, and without giving up records: have `toByteArray()` compute
    child sizes once into a scratch array and thread it through `writeTo`, rather than caching per instance.
    See [BENCHMARKS.md](BENCHMARKS.md).
-3. **Validation on parse** — currently a parsed message that violates a constraint is rejected. Should
-   there be a lenient parse for reading legacy data?
-4. **`@Example` / `@RootNode`** — currently Javadoc only. Should they feed the existing AsyncAPI
-   documentation pipeline directly?
+3. ~~**Validation on parse**~~ — **done**: two switches, one at generation time and one at runtime (§5a).
+   The runtime one gives the lenient parse for legacy data.
+4. ~~**`@Example` / `@RootNode`**~~ — **done**: a JSON sidecar under `META-INF/protogen/` (§5a). Still
+   open: wiring that sidecar into the AsyncAPI generator itself, which lives in another repo.

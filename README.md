@@ -98,7 +98,49 @@ message ConstrainedV1 {
 
 Supported: `@MinLength`, `@MaxLength`, `@Pattern`, `@Minimum`/`@Min`, `@Maximum`/`@Max`,
 `@ExclusiveMinimum`, `@ExclusiveMaximum`, `@MultipleOf`, `@MinItems`, `@MaxItems`, `@Required`.
-`@Example` and `@RootNode` are carried into the Javadoc.
+
+Validation has **two independent switches**:
+
+| Switch | Where | Default |
+|---|---|---|
+| `<emitValidation>` | plugin config, generation time | `true` — omit the checks from the bytecode entirely |
+| `-Dprotogen.validation=false` | JVM, runtime | on — folds the checks away without regenerating |
+
+The runtime one is a `static final boolean`, so switching it off costs nothing at all. It is also how you
+get a **lenient parse** for legacy data that predates a constraint, without weakening the constraint for
+everyone else.
+
+## Unknown fields
+
+Off by default; turn it on for a service that relays messages it does not fully own:
+
+```xml
+<configuration>
+    <preserveUnknownFields>true</preserveUnknownFields>
+</configuration>
+```
+
+Each record then gains a trailing `byte[] unknownFields`. Fields this build has never heard of are copied
+verbatim, re-emitted after the known ones, and included in `equals`/`hashCode` — so a message written
+against a newer schema survives a round trip byte for byte instead of being silently truncated.
+
+## Documentation metadata
+
+`@Example` and `@RootNode` are documentation rather than behaviour, so they stay out of the runtime. Each
+`.proto` gets a JSON sidecar at `META-INF/protogen/<file>.json` describing root nodes, examples,
+constraints, field numbers and the Java names everything ended up with — for a docs pipeline to read off
+the classpath without re-parsing the schema:
+
+```json
+{
+  "name": "KpiV1", "javaType": "com.java.proto.model.proto.KpiV1", "rootNode": true,
+  "fields": [ { "name": "key", "number": 1, "type": "string",
+                "examples": ["jvm_memory_committed_bytes"],
+                "constraints": { "pattern": "^[a-zA-Z_:][a-zA-Z0-9_:]*$" } } ]
+}
+```
+
+Switch it off with `<emitSchemaMetadata>false</emitSchemaMetadata>`.
 
 ## Timestamps
 

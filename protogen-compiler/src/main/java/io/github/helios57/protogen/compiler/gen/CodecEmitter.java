@@ -40,6 +40,7 @@ final class CodecEmitter {
         emitSizes(out);
         emitZigZag(out);
         emitReader(out);
+        emitUnknownBuffer(out);
 
         out.outdent();
         out.line("}");
@@ -453,6 +454,33 @@ final class CodecEmitter {
             out.line("}");
         }
 
+        if (features.contains(Feature.UNKNOWN)) {
+            out.blank();
+            out.javadoc("""
+                    Copies a field verbatim - tag and payload - into {@code sink}, so a field this build does
+                    not know survives a round trip.
+
+                    @return the sink, created on first use""");
+            out.line("U copyField(int tag, U sink) {");
+            out.indent();
+            out.line("U out = sink != null ? sink : new U();");
+            out.line("out.uvarint32(tag);");
+            out.line("int start = p;");
+            out.line("switch (tag & 7) {");
+            out.indent();
+            out.line("case 0 -> varint64();");
+            out.line("case 1 -> advance(8);");
+            out.line("case 2 -> advance(uvarint32());");
+            out.line("case 5 -> advance(4);");
+            out.line("default -> throw malformed(\"unsupported wire type \" + (tag & 7));");
+            out.outdent();
+            out.line("}");
+            out.line("out.write(b, start, p - start);");
+            out.line("return out;");
+            out.outdent();
+            out.line("}");
+        }
+
         out.blank();
         out.javadoc("Skips the payload of an unknown or unexpected field.");
         out.line("void skip(int tag) {");
@@ -502,6 +530,55 @@ final class CodecEmitter {
         out.line("    return new IllegalArgumentException(\"malformed protobuf input: \" + detail);");
         out.line("}");
 
+        out.outdent();
+        out.line("}");
+    }
+
+    /** A minimal growable byte buffer, emitted only when unknown fields are preserved. */
+    private void emitUnknownBuffer(Java out) {
+        if (!features.contains(Feature.UNKNOWN)) {
+            return;
+        }
+        out.blank();
+        out.javadoc("Growable sink for the bytes of fields this build does not know.");
+        out.line("static final class U {");
+        out.indent();
+        out.blank();
+        out.line("private byte[] b = new byte[32];");
+        out.line("private int n;");
+        out.blank();
+        out.line("void write(byte[] src, int off, int len) {");
+        out.indent();
+        out.line("ensure(len);");
+        out.line("System.arraycopy(src, off, b, n, len);");
+        out.line("n += len;");
+        out.outdent();
+        out.line("}");
+        out.blank();
+        out.line("void uvarint32(int value) {");
+        out.indent();
+        out.line("ensure(5);");
+        out.line("while ((value & ~0x7f) != 0) {");
+        out.indent();
+        out.line("b[n++] = (byte) ((value & 0x7f) | 0x80);");
+        out.line("value >>>= 7;");
+        out.outdent();
+        out.line("}");
+        out.line("b[n++] = (byte) value;");
+        out.outdent();
+        out.line("}");
+        out.blank();
+        out.line("byte[] toByteArray() {");
+        out.line("    return Arrays.copyOf(b, n);");
+        out.line("}");
+        out.blank();
+        out.line("private void ensure(int extra) {");
+        out.indent();
+        out.line("if (n + extra > b.length) {");
+        out.line("    b = Arrays.copyOf(b, Math.max(b.length * 2, n + extra));");
+        out.line("}");
+        out.outdent();
+        out.line("}");
         out.outdent();
         out.line("}");
     }

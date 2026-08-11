@@ -40,6 +40,39 @@
 
     <build>
         <plugins>
+            <!--
+              The runtime validation switch is a static final read at class initialisation, so it can only
+              be exercised in a JVM that had the property set before the class loaded. Hence two surefire
+              executions: the default one excludes that test, and a second runs only it, with the property.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>**/ValidationRuntimeSwitchTest.java</exclude>
+                    </excludes>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>validation-disabled</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>test</goal>
+                        </goals>
+                        <configuration>
+                            <excludes combine.self="override"/>
+                            <includes>
+                                <include>**/ValidationRuntimeSwitchTest.java</include>
+                            </includes>
+                            <systemPropertyVariables>
+                                <protogen.validation>false</protogen.validation>
+                            </systemPropertyVariables>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
             <!-- the interop module reuses the test-side builders, so publish them as a test-jar -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -58,11 +91,28 @@
                 <artifactId>protogen-maven-plugin</artifactId>
                 <version>${project.version}</version>
                 <executions>
+                    <!-- the defaults: validation on, unknown fields dropped -->
                     <execution>
                         <id>generate</id>
                         <goals>
                             <goal>generate</goal>
                         </goals>
+                    </execution>
+                    <!--
+                      Example configuration for the two opt-ins, and the fixture the tests use to prove
+                      they work. A second source root keeps them independent of the default one, since a
+                      schema cannot be generated both ways into the same package.
+                    -->
+                    <execution>
+                        <id>generate-opt-ins</id>
+                        <goals>
+                            <goal>generate</goal>
+                        </goals>
+                        <configuration>
+                            <protoSourceRoot>${project.basedir}/src/main/proto-optin</protoSourceRoot>
+                            <preserveUnknownFields>true</preserveUnknownFields>
+                            <emitValidation>false</emitValidation>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>
