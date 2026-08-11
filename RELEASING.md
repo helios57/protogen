@@ -42,6 +42,11 @@ gpg --keyserver keyserver.ubuntu.com --send-keys 4A438D5FE3746224
 gpg --armor --export-secret-keys 4A438D5FE3746224
 ```
 
+> **Step 1 is not optional and is easy to skip.** The first release attempt uploaded and signed everything
+> correctly, then Central rejected the whole deployment with *"Could not find a public key by the key
+> fingerprint"* for every artifact. The key had never been sent to a keyserver. Signing locally proves
+> nothing about this — Central looks the key up on its own.
+
 If you would rather use a different key, generate one with
 `gpg --quick-generate-key "helios57 <helios157@gmail.com>" rsa4096 sign 2y` and substitute its id.
 
@@ -103,12 +108,22 @@ then press **Publish** in the portal's *Deployments* view. Once a release has go
 
 ## What gets published
 
-| Artifact | Published |
-|---|---|
-| `io.github.helios57.protogen:protogen-parent` | yes (pom) |
-| `io.github.helios57.protogen:protogen-compiler` | yes |
-| `io.github.helios57.protogen:protogen-maven-plugin` | yes |
-| `protogen-it`, `protogen-interop`, `protogen-benchmark` | no — `maven.deploy.skip`, they are test and benchmark harnesses |
+| Artifact | Published | Why |
+|---|---|---|
+| `io.github.helios57.protogen:protogen-maven-plugin` | yes | the thing people actually use |
+| `io.github.helios57.protogen:protogen-compiler` | yes | the plugin depends on it, so it has to resolve |
+| `io.github.helios57.protogen:protogen-parent` | yes (pom) | the two above name it as their parent |
+| `protogen-it`, `protogen-interop`, `protogen-benchmark` | **no** | test and benchmark harnesses |
+
+The deploy step names its modules explicitly:
+
+```bash
+mvn -Prelease deploy -pl .,protogen-compiler,protogen-maven-plugin
+```
+
+`maven.deploy.skip` on the harness modules is *not* sufficient by itself — the central-publishing plugin
+gathers artifacts from every module in the reactor regardless, which is how the first release attempt ended
+up trying to publish `protogen-benchmark`. Limiting the reactor is what actually excludes them.
 
 Each published artifact carries a sources jar, a javadoc jar and a `.asc` signature, which is what
 Central validates.

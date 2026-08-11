@@ -71,19 +71,23 @@ jobs:
       - name: Build, test and verify
         run: mvn -B -ntp verify
 
+      # Only the published modules are in the deploy reactor. maven.deploy.skip is not enough on its own:
+      # the central-publishing plugin collects artifacts from every module in the reactor regardless, and
+      # the first release failed on signatures for protogen-benchmark because of exactly that.
+      # protogen-compiler is here because the plugin depends on it; without it the plugin cannot resolve.
       - name: Deploy to Maven Central
         if: ${{ github.event_name == 'push' || !inputs.dryRun }}
         env:
           MAVEN_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
           MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        run: mvn -B -ntp -Prelease deploy -DskipTests
+        run: mvn -B -ntp -Prelease deploy -DskipTests -pl .,protogen-compiler,protogen-maven-plugin
 
       - name: Dry run - build and sign only
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.dryRun }}
         env:
           MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        run: mvn -B -ntp -Prelease verify -DskipTests
+        run: mvn -B -ntp -Prelease verify -DskipTests -pl .,protogen-compiler,protogen-maven-plugin
 
       - name: Upload the artifacts that would be published
         uses: actions/upload-artifact@v4
