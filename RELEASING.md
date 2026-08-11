@@ -55,10 +55,15 @@ If you would rather use a different key, generate one with
 | `CENTRAL_USERNAME` | the token username from step 2 |
 | `CENTRAL_PASSWORD` | the token password from step 2 |
 | `GPG_PRIVATE_KEY` | the entire `gpg --armor --export-secret-keys` output, including the BEGIN/END lines |
-| `GPG_PASSPHRASE` | the passphrase for that key |
+| `GPG_PASSPHRASE` | the passphrase for that key — **optional**, leave it out if the key has none |
 
-The release workflow checks all four up front and fails with a clear message if any is missing, rather
-than getting halfway through a publish.
+The release workflow checks the first three up front and fails with a clear message if any is missing,
+rather than getting halfway through a publish. The passphrase is not required, because a key without one
+is a perfectly valid setup.
+
+> A signing key with no passphrase means the exported secret is, on its own, enough to sign as you. That
+> is common practice for CI and nothing here depends on changing it — but a passphrase would make the
+> secret useless without a second value, so it is worth knowing you have made that trade.
 
 ---
 
