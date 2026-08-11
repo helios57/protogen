@@ -36,7 +36,7 @@ the helpers your schema actually uses.
 <plugin>
     <groupId>io.github.helios57.protogen</groupId>
     <artifactId>protogen-maven-plugin</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>0.1.0</version>
     <executions>
         <execution>
             <goals><goal>generate</goal></goals>
