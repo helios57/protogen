@@ -22,7 +22,7 @@ public final class JavaGenerator {
     /**
      * One generated file.
      *
-     * @param relativePath path relative to the output directory, e.g. {@code ch/sbb/tms/Foo.java}
+     * @param relativePath path relative to the output directory, e.g. {@code com/example/Foo.java}
      * @param content      the full text
      * @param kind         whether it is compiled or packaged as a resource
      */

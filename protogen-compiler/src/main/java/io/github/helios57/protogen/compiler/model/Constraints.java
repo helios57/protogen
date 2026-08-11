@@ -10,7 +10,7 @@ import java.util.regex.Pattern;
 /**
  * Validation constraints declared as {@code @Annotation} lines in a field's leading comment.
  * <p>
- * The vocabulary matches the JSON-Schema flavoured annotations already used across the SBB {@code .proto}
+ * The vocabulary matches the JSON-Schema flavoured annotations already common in real-world {@code .proto}
  * files, so the same comment drives both the AsyncAPI documentation pipeline and the generated validation.
  *
  * @param minLength        {@code @MinLength n} - minimum {@code String} length

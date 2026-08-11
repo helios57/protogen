@@ -155,7 +155,7 @@ the JDK alone, and nobody does it as a Maven plugin without `protoc`.
 4. **ascopes' plugin UX** — the parameter surface to copy for the Mojo.
 5. **A pure-Java parser is mandatory.** Every rejected generator except Protostuff/Wire is a *protoc plugin*.
    Depending on a native binary contradicts "fully independent", so `protogen` parses `.proto` itself.
-   (Bonus: our own parser can retain leading comments, which the SBB protos use for `@Example` / `@MinLength`
+   (Bonus: our own parser can retain leading comments, which real-world schemas use for `@Example` / `@MinLength`
    documentation annotations — protoc-based generators discard or awkwardly encode these.)
 
 ---
