@@ -10,3 +10,4 @@ target/
 .DS_Store
 .flattened-pom.xml
 jmh-result.*
+dependency-reduced-pom.xml
