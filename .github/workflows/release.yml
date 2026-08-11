@@ -24,15 +24,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # GPG_PASSPHRASE is deliberately not required: a signing key may have no passphrase, and demanding
+      # one would block the release over a secret that carries no information.
       - name: Check the required secrets are present
         env:
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
           missing=""
-          for name in CENTRAL_USERNAME CENTRAL_PASSWORD GPG_PRIVATE_KEY GPG_PASSPHRASE; do
+          for name in CENTRAL_USERNAME CENTRAL_PASSWORD GPG_PRIVATE_KEY; do
             [ -z "${!name}" ] && missing="$missing $name"
           done
           if [ -n "$missing" ]; then
