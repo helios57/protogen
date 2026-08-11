@@ -45,6 +45,46 @@ class ImportPurityTest {
                 .isEmpty();
     }
 
+    /**
+     * An import is not the only way to reach outside the JDK - a fully qualified name works too, and would
+     * slip past a check that only reads import statements.
+     */
+    @Test
+    void generatedSourcesNameNoPackageOutsideTheJdkOrTheirOwn() throws IOException {
+        Pattern qualified = Pattern.compile("\\b([a-z][a-z0-9]*(?:\\.[a-z][a-z0-9_]*)+)\\.[A-Z]\\w*");
+        List<String> violations = new ArrayList<>();
+
+        List<String> ownPackages = generatedPackages();
+
+        for (Path java : generatedJavaFiles()) {
+            Matcher m = qualified.matcher(Files.readString(java));
+            while (m.find()) {
+                String pkg = m.group(1);
+                boolean allowed = pkg.startsWith("java.") || pkg.startsWith("javax.")
+                        || ownPackages.stream().anyMatch(own -> own.equals(pkg) || own.startsWith(pkg + "."));
+                if (!allowed) {
+                    violations.add(java.getFileName() + " references " + pkg);
+                }
+            }
+        }
+
+        assertThat(violations)
+                .as("generated code may name only JDK types and its own generated types")
+                .isEmpty();
+    }
+
+    @Test
+    void theGeneratedCodecIsPrunedToWhatTheSchemaUses() throws IOException {
+        Path codec = GENERATED.resolve("protogen/it/model/ProtoWire.java");
+        assertThat(codec).exists();
+        String source = Files.readString(codec);
+
+        // these sample schemas use sint32/sint64, so the zig-zag helpers must be there
+        assertThat(source).contains("static int zz32(").contains("static long zz64(");
+        // and they never use a group, an extension or a text format, so none of that may appear
+        assertThat(source).doesNotContain("class Builder").doesNotContain("Descriptor");
+    }
+
     @Test
     void generatedSourcesUseNoReflection() throws IOException {
         List<String> violations = new ArrayList<>();
@@ -61,6 +101,16 @@ class ImportPurityTest {
         assertThat(violations)
                 .as("generated code must not use reflection (PLAN.md I4)")
                 .isEmpty();
+    }
+
+    /** @return the Java packages protogen generated into, derived from the output tree */
+    private static List<String> generatedPackages() throws IOException {
+        return generatedJavaFiles().stream()
+                .map(p -> GENERATED.relativize(p).getParent())
+                .filter(java.util.Objects::nonNull)
+                .map(p -> p.toString().replace(java.io.File.separatorChar, '.'))
+                .distinct()
+                .toList();
     }
 
     private static List<Path> generatedJavaFiles() throws IOException {

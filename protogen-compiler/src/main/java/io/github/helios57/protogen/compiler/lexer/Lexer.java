@@ -59,26 +59,27 @@ public final class Lexer {
         }
     }
 
+    /**
+     * Consumes whitespace and comments, accumulating the comments into {@code pendingComment}.
+     * <p>
+     * A comment block attaches to the next token even when blank lines separate the two. protoc would call
+     * such a comment "detached", but here comments carry {@code @Pattern} and {@code @Minimum} annotations
+     * that become validation, and a schema author who leaves a blank line after the comment block plainly
+     * still means it for the declaration that follows.
+     */
     private void skipWhitespaceAndComments(StringBuilder pendingComment) {
-        // A comment block is attached to the token that follows it, unless a blank line separates the two.
-        int newlinesSinceComment = 0;
         while (idx < src.length()) {
             char c = src.charAt(idx);
             if (Character.isWhitespace(c)) {
-                if (c == '\n' && !pendingComment.isEmpty() && ++newlinesSinceComment > 1) {
-                    pendingComment.setLength(0);
-                }
                 advance();
             } else if (c == '/' && peek(1) == '/') {
                 advance();
                 advance();
                 pendingComment.append(readWhile(ch -> ch != '\n').strip()).append('\n');
-                newlinesSinceComment = 0;
             } else if (c == '/' && peek(1) == '*') {
                 advance();
                 advance();
                 pendingComment.append(readBlockComment()).append('\n');
-                newlinesSinceComment = 0;
             } else {
                 return;
             }

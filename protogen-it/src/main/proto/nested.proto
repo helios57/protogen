@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+package protogen.it;
+
+option java_multiple_files = true;
+option java_package = "protogen.it.model";
+
+import "enums.proto";
+
+/**
+ * Nested messages, nested enums, repeated message fields, maps and recursion - the shape the surveyed
+ * schemas use most.
+ *
+ * @RootNode
+ */
+message NodeV1 {
+  // @Example node-a
+  string name = 1;
+
+  StageEnumV1 stage = 2;
+
+  // Optional suffix; must stay distinguishable from the empty string.
+  // @Example beta
+  optional string stageSuffix = 3;
+
+  // Recursion: a message referring to itself.
+  repeated NodeV1 children = 4;
+
+  // Packed on the wire.
+  repeated int32 ports = 5;
+
+  // Not packed: length-delimited elements get one tag each.
+  repeated string tags = 6;
+
+  // @Example { primary: https://a.example, backup: https://b.example }
+  map<string, string> endpoints = 7;
+
+  CoordinatesV1 location = 8;
+
+  KindV1 kind = 9;
+
+  map<string, CoordinatesV1> namedLocations = 10;
+
+  map<int32, bool> flagsByCode = 11;
+
+  /**
+   * A nested message, referred to from the enclosing message and from other files.
+   */
+  message CoordinatesV1 {
+    double latitude = 1;
+    double longitude = 2;
+  }
+
+  /**
+   * A nested enum, referred to as NodeV1.KindV1 from other scopes.
+   */
+  enum KindV1 {
+    KIND_V1_UNSPECIFIED = 0;
+    BROKER = 1;
+    CONCENTRATOR = 2;
+  }
+}
+
+message NodesV1 {
+  repeated NodeV1 nodes = 1;
+}
+
+/**
+ * A message with no fields at all.
+ */
+message EmptyV1 {
+}

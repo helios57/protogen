@@ -40,6 +40,19 @@
 
     <build>
         <plugins>
+            <!-- the interop module reuses the test-side builders, so publish them as a test-jar -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.4.2</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>test-jar</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>io.github.helios57.protogen</groupId>
                 <artifactId>protogen-maven-plugin</artifactId>

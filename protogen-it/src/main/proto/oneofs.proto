@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package protogen.it;
+
+option java_multiple_files = true;
+option java_package = "protogen.it.model";
+
+import "nested.proto";
+
+/**
+ * oneof, reserved ranges and a cross-file message reference.
+ */
+message PayloadV1 {
+  string subject = 1;
+
+  oneof body {
+    string message = 2;
+    int64 counter = 3;
+    NodeV1 node = 4;
+    bytes raw = 5;
+  }
+
+  reserved 6, 7;
+  reserved 100 to 110;
+  reserved "legacyField";
+
+  string trailer = 200;
+}

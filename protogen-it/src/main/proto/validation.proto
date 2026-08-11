@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package protogen.it;
+
+option java_multiple_files = true;
+option java_package = "protogen.it.model";
+
+/**
+ * The full annotation vocabulary found in the surveyed schemas. protogen turns these comment
+ * annotations into checks inside the generated record's compact constructor, so an invalid message
+ * cannot be constructed at all - neither by hand nor by parsing.
+ *
+ * @RootNode
+ */
+message ConstrainedV1 {
+  /*
+   * An instance id.
+   *
+   * @MinLength 3
+   * @MaxLength 10
+   * @Example abcdef
+   */
+  string instanceId = 1;
+
+  /*
+   * A country code.
+   *
+   * @Pattern ^[A-Z]{2}\d+$
+   * @Example CH42
+   */
+  string code = 2;
+
+  /*
+   * Per message up counting number.
+   *
+   * @Minimum 1
+   * @Maximum 100
+   */
+  int32 msgIndex = 3;
+
+  /*
+   * @ExclusiveMinimum 0
+   * @ExclusiveMaximum 1000
+   */
+  int64 weight = 4;
+
+  /*
+   * @MultipleOf 5
+   */
+  int32 stepped = 5;
+
+  /*
+   * @MinItems 1
+   * @MaxItems 5
+   */
+  repeated string labels = 6;
+
+  /*
+   * @Required
+   */
+  string mandatory = 7;
+
+  /*
+   * An optional field carries its constraint only when present.
+   *
+   * @MinLength 4
+   */
+  optional string nickname = 8;
+}

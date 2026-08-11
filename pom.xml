@@ -24,6 +24,7 @@
         <module>protogen-compiler</module>
         <module>protogen-maven-plugin</module>
         <module>protogen-it</module>
+        <module>protogen-interop</module>
     </modules>
 
     <properties>

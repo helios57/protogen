@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+package com.java.proto;
+
+option java_multiple_files = true;
+
+option java_package = "com.java.proto.model.proto";
+
+
+/**
+
+* @RootNode
+
+*/
+
+message KpiV1 {
+
+  /*
+
+   * Unique key to identify metric OpenMetrics specification for key names: https://github.com/prometheus/OpenMetrics/blob/main/specification/OpenMetrics.md#metricfamily
+
+   * @Pattern ^[a-zA-Z_:][a-zA-Z0-9_:]*$
+
+   * @Example jvm_memory_committed_bytes
+
+   */
+
+  string key = 1;
+
+  /*
+
+   * Optional labels to define key more specific. OpenMetrics specification for label: https://github.com/prometheus/OpenMetrics/blob/main/specification/OpenMetrics.md#label
+
+   * @Example {"area":"heap"}
+
+   */
+
+  map<string, string> label = 2;
+
+  /*
+
+   * The metrics value
+
+   * @Example 42.1
+
+   */
+
+  double value = 3;
+
+  /*
+
+   * The meta information specifies details about the metric itself such as TYPE, UNIT and HELP that is postponed through to prometheus, visible in queries.
+
+   * @Example {"TYPE":"seconds"}
+
+   */
+
+  map<string, string> meta = 4;
+
+}
+
+// @AI hint to generate demo data
+
+// key is mandatory
+
+// label is optional
+
+// value is mandatory, can be negative
+
+// meta is optional
