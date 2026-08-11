@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # GPG_PASSPHRASE is deliberately not required: a signing key may have no passphrase, and demanding
       # one would block the release over a secret that carries no information.
@@ -42,7 +42,7 @@ jobs:
           fi
 
       # setup-java writes the settings.xml server entry and imports the signing key for us
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
@@ -90,7 +90,7 @@ jobs:
         run: mvn -B -ntp -Prelease verify -DskipTests -pl .,protogen-compiler,protogen-maven-plugin
 
       - name: Upload the artifacts that would be published
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-artifacts
           path: |
