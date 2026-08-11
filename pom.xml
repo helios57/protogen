@@ -156,10 +156,11 @@
                         <extensions>true</extensions>
                         <configuration>
                             <publishingServerId>central</publishingServerId>
-                            <!-- false = upload and validate, then publish by hand from the portal.
-                                 Flip to true once a release has gone through cleanly. -->
-                            <autoPublish>false</autoPublish>
-                            <waitUntil>validated</waitUntil>
+                            <!-- Central validates before it publishes either way; autoPublish only
+                                 removes the manual confirmation step. waitUntil=published makes the
+                                 build report the real outcome rather than exiting at validation. -->
+                            <autoPublish>true</autoPublish>
+                            <waitUntil>published</waitUntil>
                         </configuration>
                     </plugin>
                 </plugins>
