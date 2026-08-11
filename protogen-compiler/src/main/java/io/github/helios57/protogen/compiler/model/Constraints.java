@@ -46,14 +46,23 @@ public record Constraints(Integer minLength,
     public static final Constraints NONE =
             new Constraints(null, null, null, null, null, null, null, null, null, null, false, List.of(), false);
 
-    /** @return {@code true} if anything here produces a runtime check */
+    /**
+     * Whether any of these constraints turns into generated code.
+     *
+     * @return {@code true} if anything here produces a runtime check
+     */
     public boolean hasValidation() {
         return minLength != null || maxLength != null || minimum != null || maximum != null
                 || exclusiveMinimum != null || exclusiveMaximum != null || multipleOf != null
                 || minItems != null || maxItems != null || pattern != null || required;
     }
 
-    /** Parses the annotation lines out of a leading comment block. Unknown annotations are ignored. */
+    /**
+     * Parses the annotation lines out of a leading comment block. Unknown annotations are ignored.
+     *
+     * @param comment the leading comment, or {@code null}
+     * @return the constraints it declares, never {@code null}
+     */
     public static Constraints parse(String comment) {
         if (comment == null || comment.isBlank()) {
             return NONE;

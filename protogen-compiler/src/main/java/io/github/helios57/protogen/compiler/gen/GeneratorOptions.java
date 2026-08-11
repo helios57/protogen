@@ -13,6 +13,11 @@ public record GeneratorOptions(boolean emitJavadoc,
                                boolean emitValidation,
                                boolean emitSchemaMetadata) {
 
+    /**
+     * The defaults: Javadoc, validation and metadata on, unknown fields dropped.
+     *
+     * @return the defaults: Javadoc, validation and metadata on, unknown fields dropped
+     */
     public static GeneratorOptions defaults() {
         return new GeneratorOptions(true, false, true, true);
     }

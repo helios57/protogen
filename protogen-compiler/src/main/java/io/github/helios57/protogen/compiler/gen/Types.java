@@ -117,7 +117,11 @@ final class Types {
         };
     }
 
-    /** @return whether the component may hold {@code null} */
+    /**
+     * Whether the component may hold {@code null}.
+     *
+     * @return whether the component may hold {@code null}
+     */
     static boolean nullable(Defs.FieldDef field) {
         if (field.repeated() || field.kind() == Defs.Kind.MAP) {
             return false; // normalised to an empty collection

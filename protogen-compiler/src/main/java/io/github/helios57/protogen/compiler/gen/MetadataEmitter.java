@@ -28,7 +28,11 @@ final class MetadataEmitter {
     private MetadataEmitter() {
     }
 
-    /** @return the sidecar path and content for one {@code .proto} file */
+    /**
+     * The sidecar path and content for one {@code .proto} file.
+     *
+     * @return the sidecar path and content for one {@code .proto} file
+     */
     static JavaGenerator.GeneratedFile emit(ProtoFile file) {
         Json json = new Json();
         json.objectStart();

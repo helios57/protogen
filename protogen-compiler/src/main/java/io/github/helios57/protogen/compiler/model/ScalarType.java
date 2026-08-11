@@ -5,25 +5,47 @@ import java.util.Locale;
 /** The proto3 scalar types, with everything code generation needs to know about each. */
 public enum ScalarType {
 
+    /** 64-bit IEEE 754, fixed width. */
     DOUBLE("double", "double", "Double", WireType.FIXED64, "0.0D", true),
+    /** 32-bit IEEE 754, fixed width. */
     FLOAT("float", "float", "Float", WireType.FIXED32, "0.0F", true),
+    /** Signed 32-bit varint; negatives cost ten bytes. */
     INT32("int32", "int", "Integer", WireType.VARINT, "0", true),
+    /** Signed 64-bit varint; negatives cost ten bytes. */
     INT64("int64", "long", "Long", WireType.VARINT, "0L", true),
+    /** Unsigned 32-bit varint. */
     UINT32("uint32", "int", "Integer", WireType.VARINT, "0", true),
+    /** Unsigned 64-bit varint. */
     UINT64("uint64", "long", "Long", WireType.VARINT, "0L", true),
+    /** Signed 32-bit varint, zig-zag encoded so small negatives stay small. */
     SINT32("sint32", "int", "Integer", WireType.VARINT, "0", true),
+    /** Signed 64-bit varint, zig-zag encoded so small negatives stay small. */
     SINT64("sint64", "long", "Long", WireType.VARINT, "0L", true),
+    /** Unsigned 32-bit, fixed width. */
     FIXED32("fixed32", "int", "Integer", WireType.FIXED32, "0", true),
+    /** Unsigned 64-bit, fixed width. */
     FIXED64("fixed64", "long", "Long", WireType.FIXED64, "0L", true),
+    /** Signed 32-bit, fixed width. */
     SFIXED32("sfixed32", "int", "Integer", WireType.FIXED32, "0", true),
+    /** Signed 64-bit, fixed width. */
     SFIXED64("sfixed64", "long", "Long", WireType.FIXED64, "0L", true),
+    /** A single byte, 0 or 1. */
     BOOL("bool", "boolean", "Boolean", WireType.VARINT, "false", true),
+    /** Length-prefixed UTF-8. */
     STRING("string", "String", "String", WireType.LENGTH_DELIMITED, "\"\"", false),
+    /** Length-prefixed raw bytes. */
     BYTES("bytes", "byte[]", "byte[]", WireType.LENGTH_DELIMITED, "ProtoWire.EMPTY_BYTES", false);
 
     /** Protobuf wire types. */
     public enum WireType {
-        VARINT(0), FIXED64(1), LENGTH_DELIMITED(2), FIXED32(5);
+        /** Variable-length integer. */
+        VARINT(0),
+        /** Eight bytes, little endian. */
+        FIXED64(1),
+        /** A length prefix followed by that many bytes. */
+        LENGTH_DELIMITED(2),
+        /** Four bytes, little endian. */
+        FIXED32(5);
 
         private final int code;
 
@@ -31,6 +53,11 @@ public enum ScalarType {
             this.code = code;
         }
 
+        /**
+         * The three-bit code carried in a field tag.
+         *
+         * @return the wire type code
+         */
         public int code() {
             return code;
         }
@@ -53,7 +80,12 @@ public enum ScalarType {
         this.packable = packable;
     }
 
-    /** @return the scalar type with this proto name, or {@code null} if the name is not a scalar */
+    /**
+     * The scalar type with this proto name, or {@code null} if the name is not a scalar.
+     *
+     * @param name the proto type name to look up
+     * @return the scalar type with this proto name, or {@code null} if the name is not a scalar
+     */
     public static ScalarType byProtoName(String name) {
         for (ScalarType t : values()) {
             if (t.protoName.equals(name)) {
@@ -63,34 +95,65 @@ public enum ScalarType {
         return null;
     }
 
+    /**
+     * The name as written in a schema.
+     *
+     * @return the proto name of this type
+     */
     public String protoName() {
         return protoName;
     }
 
-    /** @return the Java type used for a singular field, primitive where possible */
+    /**
+     * The Java type used for a singular field, primitive where possible.
+     *
+     * @return the Java type used for a singular field, primitive where possible
+     */
     public String javaType() {
         return javaType;
     }
 
-    /** @return the Java type usable as a generic argument, e.g. in {@code List<Integer>} */
+    /**
+     * The Java type usable as a generic argument, e.g. in {@code List<Integer>}.
+     *
+     * @return the Java type usable as a generic argument, e.g. in {@code List<Integer>}
+     */
     public String boxedType() {
         return boxedType;
     }
 
+    /**
+     * How values of this type are framed on the wire.
+     *
+     * @return the wire type
+     */
     public WireType wireType() {
         return wireType;
     }
 
+    /**
+     * The proto3 default, as a Java expression.
+     *
+     * @return the default literal
+     */
     public String defaultLiteral() {
         return defaultLiteral;
     }
 
-    /** @return whether {@code repeated} fields of this type are packed by default in proto3 */
+    /**
+     * Whether {@code repeated} fields of this type are packed by default in proto3.
+     *
+     * @return whether {@code repeated} fields of this type are packed by default in proto3
+     */
     public boolean packable() {
         return packable;
     }
 
-    /** @return the {@code ProtoWire.Writer} method that writes a value of this type without its tag */
+    /**
+     * The {@code ProtoWire.Writer} method that writes a value of this type without its tag.
+     *
+     * @return the {@code ProtoWire.Writer} method that writes a value of this type without its tag
+     */
     public String writerMethod() {
         return switch (this) {
             case DOUBLE -> "writeFixed64";
@@ -108,7 +171,12 @@ public enum ScalarType {
         };
     }
 
-    /** @return an expression converting the Java value {@code v} into what {@link #writerMethod()} expects */
+    /**
+     * An expression converting the Java value {@code v} into what {@link #writerMethod()} expects.
+     *
+     * @param v a Java expression holding the value
+     * @return an expression converting the Java value {@code v} into what {@link #writerMethod()} expects
+     */
     public String toWireExpr(String v) {
         return switch (this) {
             case DOUBLE -> "Double.doubleToRawLongBits(" + v + ")";
@@ -119,7 +187,12 @@ public enum ScalarType {
         };
     }
 
-    /** @return an expression reading one value of this type from the {@code ProtoWire.Reader} {@code r} */
+    /**
+     * An expression reading one value of this type from the {@code ProtoWire.Reader} {@code r}.
+     *
+     * @param r the name of the reader variable in scope
+     * @return an expression reading one value of this type from the {@code ProtoWire.Reader} {@code r}
+     */
     public String readExpr(String r) {
         return switch (this) {
             case DOUBLE -> "Double.longBitsToDouble(" + r + ".readFixed64())";
@@ -136,7 +209,12 @@ public enum ScalarType {
         };
     }
 
-    /** @return an expression yielding the encoded size of the Java value {@code v}, excluding its tag */
+    /**
+     * An expression yielding the encoded size of the Java value {@code v}, excluding its tag.
+     *
+     * @param v a Java expression holding the value
+     * @return an expression yielding the encoded size of the Java value {@code v}, excluding its tag
+     */
     public String sizeExpr(String v) {
         return switch (this) {
             case DOUBLE, FIXED64, SFIXED64 -> "8";
@@ -152,7 +230,12 @@ public enum ScalarType {
         };
     }
 
-    /** @return an expression that is true when {@code v} differs from this type's proto3 default */
+    /**
+     * An expression that is true when {@code v} differs from this type's proto3 default.
+     *
+     * @param v a Java expression holding the value
+     * @return an expression that is true when {@code v} differs from this type's proto3 default
+     */
     public String isNonDefaultExpr(String v) {
         return switch (this) {
             case STRING -> "!" + v + ".isEmpty()";

@@ -18,6 +18,10 @@ import java.util.Map;
  */
 public final class Linker {
 
+    /** Creates a linker with an empty symbol table. */
+    public Linker() {
+    }
+
     /** {@code google.protobuf.Timestamp}, mapped to {@link java.time.Instant} rather than generated. */
     public static final String TIMESTAMP = "google.protobuf.Timestamp";
 
@@ -28,7 +32,13 @@ public final class Linker {
 
     private final Map<String, Defs.TypeDef> symbols = new LinkedHashMap<>();
 
-    /** Links the given files into a resolved schema. */
+    /**
+     * Links the given files into a resolved schema.
+     *
+     * @param files the parsed files, which must include everything they refer to
+     * @return the linked schema
+     * @throws io.github.helios57.protogen.compiler.ProtoCompileException if a reference cannot be resolved
+     */
     public Schema link(List<ProtoFile> files) {
         for (ProtoFile file : files) {
             String scope = file.protoPackage();

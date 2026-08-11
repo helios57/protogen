@@ -24,12 +24,22 @@ public final class Lexer {
     private int line = 1;
     private int col = 1;
 
+    /**
+     * Creates a lexer over one schema source.
+     *
+     * @param file the file name to report in diagnostics
+     * @param src  the schema text
+     */
     public Lexer(String file, String src) {
         this.file = file;
         this.src = src;
     }
 
-    /** Tokenizes the whole input. The last token is always {@link TokenType#EOF}. */
+    /**
+     * Tokenizes the whole input. The last token is always {@link TokenType#EOF}.
+     *
+     * @return the tokens, with comments attached to the tokens that follow them
+     */
     public List<Token> tokenize() {
         List<Token> out = new ArrayList<>();
         StringBuilder pendingComment = new StringBuilder();

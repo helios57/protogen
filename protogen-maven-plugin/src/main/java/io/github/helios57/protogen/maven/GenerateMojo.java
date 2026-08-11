@@ -32,6 +32,10 @@ import java.util.stream.Stream;
 @Mojo(name = "generate", defaultPhase = LifecyclePhase.GENERATE_SOURCES, threadSafe = true)
 public class GenerateMojo extends AbstractMojo {
 
+    /** Creates the mojo; Maven injects the parameters below. */
+    public GenerateMojo() {
+    }
+
     /** Root directory scanned for {@code .proto} files. */
     @Parameter(property = "protogen.protoSourceRoot", defaultValue = "${basedir}/src/main/proto")
     File protoSourceRoot;

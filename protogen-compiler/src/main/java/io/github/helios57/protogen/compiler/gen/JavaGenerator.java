@@ -28,6 +28,12 @@ public final class JavaGenerator {
      */
     public record GeneratedFile(String relativePath, String content, Kind kind) {
 
+        /**
+         * Creates a generated Java source file.
+         *
+         * @param relativePath path relative to the output directory
+         * @param content      the full source text
+         */
         public GeneratedFile(String relativePath, String content) {
             this(relativePath, content, Kind.SOURCE);
         }
@@ -35,11 +41,21 @@ public final class JavaGenerator {
 
     private final GeneratorOptions options;
 
+    /**
+     * Creates a generator.
+     *
+     * @param options what to emit
+     */
     public JavaGenerator(GeneratorOptions options) {
         this.options = options;
     }
 
-    /** Generates every file for the schema, including one {@code ProtoWire} per Java package. */
+    /**
+     * Generates every file for the schema, including one {@code ProtoWire} per Java package.
+     *
+     * @param schema the linked schema
+     * @return the sources and resources to write
+     */
     public List<GeneratedFile> generate(Schema schema) {
         List<GeneratedFile> out = new ArrayList<>();
         for (String javaPackage : schema.javaPackages()) {

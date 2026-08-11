@@ -26,12 +26,24 @@ public final class ProtoParser {
     private final String fileName;
     private int pos;
 
+    /**
+     * Creates a parser over one schema source.
+     *
+     * @param fileName the file name to report in diagnostics
+     * @param source   the schema text
+     */
     public ProtoParser(String fileName, String source) {
         this.fileName = fileName;
         this.tokens = new Lexer(fileName, source).tokenize();
     }
 
-    /** Parses the whole file. */
+    /**
+     * Parses the whole file.
+     *
+     * @return the parsed file, with types declared but not yet resolved
+     * @throws io.github.helios57.protogen.compiler.ProtoCompileException on a syntax error or an
+     *         unsupported construct, located at {@code file:line:col}
+     */
     public ProtoFile parse() {
         String syntax = null;
         String protoPackage = "";

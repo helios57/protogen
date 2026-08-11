@@ -16,28 +16,48 @@ import java.util.Set;
  */
 public enum Feature {
 
+    /** Writes an unsigned varint. */
     W_UVARINT32,
+    /** Writes an {@code int32}, sign-extending negatives to ten bytes as protoc does. */
     W_VARINT32,
+    /** Writes a 64-bit varint. */
     W_VARINT64,
+    /** Writes four bytes, little endian. */
     W_FIXED32,
+    /** Writes eight bytes, little endian. */
     W_FIXED64,
+    /** Writes a length-prefixed UTF-8 string. */
     W_STRING,
+    /** Writes a length-prefixed byte string. */
     W_BYTES,
 
+    /** Encoded size of an unsigned varint. */
     S_UVARINT32,
+    /** Encoded size of an {@code int32}. */
     S_VARINT32,
+    /** Encoded size of a 64-bit varint. */
     S_VARINT64,
+    /** Encoded size of a length-prefixed UTF-8 string. */
     S_STRING,
+    /** Encoded size of a length-prefixed byte string. */
     S_BYTES,
+    /** UTF-8 length of a string, computed without allocating the encoding. */
     UTF8_LEN,
 
+    /** Zig-zag encoding and decoding for {@code sint32}. */
     ZIGZAG32,
+    /** Zig-zag encoding and decoding for {@code sint64}. */
     ZIGZAG64,
 
+    /** Reads four bytes, little endian. */
     R_FIXED32,
+    /** Reads eight bytes, little endian. */
     R_FIXED64,
+    /** Reads a length-prefixed UTF-8 string. */
     R_STRING,
+    /** Reads a length-prefixed byte string. */
     R_BYTES,
+    /** Reads a boolean. */
     R_BOOL,
     /** {@code pushLimit}/{@code popLimit}, needed for packed repeated fields and map entries. */
     R_LIMIT,
@@ -46,7 +66,11 @@ public enum Feature {
     /** The growable buffer and {@code copyField}, needed only when unknown fields are preserved. */
     UNKNOWN;
 
-    /** Features this one is implemented in terms of. */
+    /**
+     * The helpers this one is implemented in terms of.
+     *
+     * @return the direct dependencies, which {@link #close(Set)} expands transitively
+     */
     public Set<Feature> requires() {
         return switch (this) {
             case W_VARINT32 -> EnumSet.of(W_UVARINT32, W_VARINT64);
@@ -59,7 +83,12 @@ public enum Feature {
         };
     }
 
-    /** Expands {@code seed} with everything it transitively depends on. */
+    /**
+     * Expands a set of helpers with everything they transitively depend on.
+     *
+     * @param seed the helpers known to be needed
+     * @return the transitive closure
+     */
     public static EnumSet<Feature> close(Set<Feature> seed) {
         EnumSet<Feature> all = EnumSet.noneOf(Feature.class);
         List<Feature> queue = new java.util.ArrayList<>(seed);
@@ -72,7 +101,13 @@ public enum Feature {
         return all;
     }
 
-    /** Collects the features needed by every message in the given files. */
+    /**
+     * Collects the helpers needed by every message in the given files.
+     *
+     * @param files                 the files generating into one Java package
+     * @param preserveUnknownFields whether the unknown-field capture helpers are needed
+     * @return the closed set of helpers to emit
+     */
     public static EnumSet<Feature> of(List<ProtoFile> files, boolean preserveUnknownFields) {
         EnumSet<Feature> used = EnumSet.noneOf(Feature.class);
         if (preserveUnknownFields) {
@@ -182,7 +217,12 @@ public enum Feature {
         }
     }
 
-    /** @return whether a repeated field is packed, which in proto3 is every repeated numeric or enum field */
+    /**
+     * In proto3 every repeated numeric or enum field is packed; length-delimited element types are not.
+     *
+     * @param field the field to classify
+     * @return whether the field is packed on the wire
+     */
     public static boolean isPacked(Defs.FieldDef field) {
         return field.repeated()
                 && (field.kind() == Defs.Kind.ENUM

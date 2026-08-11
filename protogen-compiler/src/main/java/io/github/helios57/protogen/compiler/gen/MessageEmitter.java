@@ -34,7 +34,11 @@ final class MessageEmitter {
         this.emitJavadoc = options.emitJavadoc();
     }
 
-    /** @return the name of the trailing unknown-fields component, or {@code null} when not preserving */
+    /**
+     * The name of the trailing unknown-fields component, or {@code null} when not preserving.
+     *
+     * @return the name of the trailing unknown-fields component, or {@code null} when not preserving
+     */
     private String unknownComponent() {
         return options.preserveUnknownFields() ? locals.unknown : null;
     }
@@ -380,7 +384,11 @@ final class MessageEmitter {
         return f.kind() == Defs.Kind.SCALAR && f.scalar() == ScalarType.BYTES;
     }
 
-    /** @return whether this message will actually carry schema-declared checks */
+    /**
+     * Whether this message will actually carry schema-declared checks.
+     *
+     * @return whether this message will actually carry schema-declared checks
+     */
     private boolean hasValidation(Defs.MessageDef message) {
         return options.emitValidation()
                 && message.fields().stream().anyMatch(f -> f.constraints().hasValidation());

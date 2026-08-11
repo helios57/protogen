@@ -18,13 +18,25 @@ public final class Names {
     private Names() {
     }
 
-    /** {@code broker_monitoring} / {@code brokerMonitoring} -&gt; {@code BrokerMonitoring} */
+    /**
+     * Converts a schema name to upper camel case: {@code broker_monitoring} and
+     * {@code brokerMonitoring} both become {@code BrokerMonitoring}.
+     *
+     * @param name the name as written in the schema
+     * @return the upper camel case form
+     */
     public static String toUpperCamel(String name) {
         String camel = toLowerCamel(name);
         return camel.isEmpty() ? camel : Character.toUpperCase(camel.charAt(0)) + camel.substring(1);
     }
 
-    /** {@code operational_day} -&gt; {@code operationalDay}; already-camel names are left alone. */
+    /**
+     * Converts a schema name to lower camel case: {@code operational_day} becomes
+     * {@code operationalDay}. Already-camel names are left alone.
+     *
+     * @param name the name as written in the schema
+     * @return the lower camel case form
+     */
     public static String toLowerCamel(String name) {
         StringBuilder sb = new StringBuilder(name.length());
         boolean upperNext = false;
@@ -42,14 +54,24 @@ public final class Names {
         return sb.toString();
     }
 
-    /** Appends an underscore to names that clash with a Java keyword, as protoc does. */
+    /**
+     * Appends an underscore to names that clash with a Java keyword, as protoc does.
+     *
+     * @param identifier a candidate Java identifier
+     * @return the identifier, made safe to use
+     */
     public static String escape(String identifier) {
         return RESERVED.contains(identifier.toLowerCase(Locale.ROOT)) && RESERVED.contains(identifier)
                 ? identifier + "_"
                 : identifier;
     }
 
-    /** The Java name of a record component for a proto field. */
+    /**
+     * The Java name of the record component generated for a proto field.
+     *
+     * @param protoName the field name as written in the schema
+     * @return the component name, camel cased and keyword-safe
+     */
     public static String fieldName(String protoName) {
         return escape(toLowerCamel(protoName));
     }
