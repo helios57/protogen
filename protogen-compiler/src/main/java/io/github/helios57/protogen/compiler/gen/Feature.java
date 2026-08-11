@@ -42,7 +42,9 @@ public enum Feature {
     /** {@code pushLimit}/{@code popLimit}, needed for packed repeated fields and map entries. */
     R_LIMIT,
     /** {@code array}/{@code slice}, needed to hand a submessage its byte range without copying. */
-    R_SLICE;
+    R_SLICE,
+    /** The growable buffer and {@code copyField}, needed only when unknown fields are preserved. */
+    UNKNOWN;
 
     /** Features this one is implemented in terms of. */
     public Set<Feature> requires() {
@@ -71,8 +73,11 @@ public enum Feature {
     }
 
     /** Collects the features needed by every message in the given files. */
-    public static EnumSet<Feature> of(List<ProtoFile> files) {
+    public static EnumSet<Feature> of(List<ProtoFile> files, boolean preserveUnknownFields) {
         EnumSet<Feature> used = EnumSet.noneOf(Feature.class);
+        if (preserveUnknownFields) {
+            used.add(Feature.UNKNOWN);
+        }
         for (ProtoFile file : files) {
             for (Defs.MessageDef m : file.messages()) {
                 collect(m, used);

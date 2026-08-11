@@ -11,19 +11,32 @@ import java.util.List;
 /** Turns a linked {@link Schema} into self-contained Java source files. */
 public final class JavaGenerator {
 
-    /**
-     * One generated Java source file.
-     *
-     * @param relativePath path relative to the output directory, e.g. {@code ch/sbb/tms/Foo.java}
-     * @param content      the full source text
-     */
-    public record GeneratedFile(String relativePath, String content) {
+    /** Where a generated file belongs in the build. */
+    public enum Kind {
+        /** Java source, compiled into the project. */
+        SOURCE,
+        /** A resource packaged into the artifact, such as the schema metadata sidecar. */
+        RESOURCE
     }
 
-    private final boolean emitJavadoc;
+    /**
+     * One generated file.
+     *
+     * @param relativePath path relative to the output directory, e.g. {@code ch/sbb/tms/Foo.java}
+     * @param content      the full text
+     * @param kind         whether it is compiled or packaged as a resource
+     */
+    public record GeneratedFile(String relativePath, String content, Kind kind) {
 
-    public JavaGenerator(boolean emitJavadoc) {
-        this.emitJavadoc = emitJavadoc;
+        public GeneratedFile(String relativePath, String content) {
+            this(relativePath, content, Kind.SOURCE);
+        }
+    }
+
+    private final GeneratorOptions options;
+
+    public JavaGenerator(GeneratorOptions options) {
+        this.options = options;
     }
 
     /** Generates every file for the schema, including one {@code ProtoWire} per Java package. */
@@ -32,12 +45,15 @@ public final class JavaGenerator {
         for (String javaPackage : schema.javaPackages()) {
             List<ProtoFile> files = schema.filesIn(javaPackage);
 
-            EnumSet<Feature> features = Feature.of(files);
+            EnumSet<Feature> features = Feature.of(files, options.preserveUnknownFields());
             out.add(new GeneratedFile(path(javaPackage, "ProtoWire"),
                     new CodecEmitter(features).emit(javaPackage)));
 
             for (ProtoFile file : files) {
                 out.addAll(generate(file, javaPackage));
+                if (options.emitSchemaMetadata()) {
+                    out.add(MetadataEmitter.emit(file));
+                }
             }
         }
         return out;
@@ -45,8 +61,8 @@ public final class JavaGenerator {
 
     private List<GeneratedFile> generate(ProtoFile file, String javaPackage) {
         List<GeneratedFile> out = new ArrayList<>();
-        MessageEmitter messages = new MessageEmitter(javaPackage, emitJavadoc);
-        EnumEmitter enums = new EnumEmitter(emitJavadoc);
+        MessageEmitter messages = new MessageEmitter(javaPackage, options);
+        EnumEmitter enums = new EnumEmitter(options.emitJavadoc());
 
         if (file.javaMultipleFiles()) {
             for (Defs.EnumDef def : file.enums()) {
@@ -64,7 +80,7 @@ public final class JavaGenerator {
 
         String outer = file.javaOuterClassName();
         Java java = header(javaPackage, file);
-        if (emitJavadoc) {
+        if (options.emitJavadoc()) {
             java.javadoc("Types generated from {@code " + file.fileName() + "}.");
         }
         java.line("public final class " + outer + " {");

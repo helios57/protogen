@@ -39,6 +39,8 @@ final class Locals {
     final String candidate;
     final String other;
     final String result;
+    /** The trailing component holding unknown fields, when preservation is enabled. */
+    final String unknown;
 
     Locals(List<Defs.FieldDef> fields) {
         Set<String> taken = new HashSet<>();
@@ -67,6 +69,7 @@ final class Locals {
         this.candidate = free("o", taken);
         this.other = free("other", taken);
         this.result = free("result", taken);
+        this.unknown = free("unknownFields", taken);
     }
 
     private static String free(String preferred, Set<String> taken) {

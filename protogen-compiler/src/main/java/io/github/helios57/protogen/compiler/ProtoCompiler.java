@@ -64,16 +64,33 @@ public final class ProtoCompiler {
 
     /** Generates the Java sources for a linked schema. */
     public List<JavaGenerator.GeneratedFile> generate(Schema schema) {
-        return new JavaGenerator(options.emitJavadoc()).generate(schema);
+        return new JavaGenerator(new io.github.helios57.protogen.compiler.gen.GeneratorOptions(
+                options.emitJavadoc(), options.preserveUnknownFields(), options.emitValidation(),
+                options.emitSchemaMetadata())).generate(schema);
     }
 
-    /** Compiler configuration. Mirrors the Mojo parameters, see PLAN.md section 5. */
+    /**
+     * Compiler configuration. Mirrors the Mojo parameters, see PLAN.md section 7.
+     *
+     * @param javaPackageOverride      replaces {@code option java_package} for every file, or {@code null}
+     * @param emitJavadoc              carry schema comments into the generated Javadoc
+     * @param failOnUnsupported        reject unsupported constructs rather than skipping them
+     * @param preserveUnknownFields    keep fields this build does not know in a trailing component, so a
+     *                                 message survives a round trip through a newer schema
+     * @param emitValidation           generate the checks declared by the schema's {@code @Minimum} style
+     *                                 annotations; the generated code can still switch them off at runtime
+     * @param emitSchemaMetadata       write a JSON sidecar describing examples, root nodes and constraints,
+     *                                 for documentation pipelines to consume
+     */
     public record Options(String javaPackageOverride,
                           boolean emitJavadoc,
-                          boolean failOnUnsupported) {
+                          boolean failOnUnsupported,
+                          boolean preserveUnknownFields,
+                          boolean emitValidation,
+                          boolean emitSchemaMetadata) {
 
         public static Options defaults() {
-            return new Options(null, true, true);
+            return new Options(null, true, true, false, true, true);
         }
     }
 }

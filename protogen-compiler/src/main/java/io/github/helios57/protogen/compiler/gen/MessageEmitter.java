@@ -21,15 +21,22 @@ import java.util.Locale;
 final class MessageEmitter {
 
     private final String javaPackage;
+    private final GeneratorOptions options;
     private final boolean emitJavadoc;
     /** The message currently being emitted, so field-level helpers can see its oneof groups. */
     private Defs.MessageDef currentMessage;
     /** Names for this message's generated locals, chosen not to collide with its components. */
     private Locals locals;
 
-    MessageEmitter(String javaPackage, boolean emitJavadoc) {
+    MessageEmitter(String javaPackage, GeneratorOptions options) {
         this.javaPackage = javaPackage;
-        this.emitJavadoc = emitJavadoc;
+        this.options = options;
+        this.emitJavadoc = options.emitJavadoc();
+    }
+
+    /** @return the name of the trailing unknown-fields component, or {@code null} when not preserving */
+    private String unknownComponent() {
+        return options.preserveUnknownFields() ? locals.unknown : null;
     }
 
     void emit(Java out, Defs.MessageDef message, boolean topLevel) {
@@ -51,21 +58,28 @@ final class MessageEmitter {
         if (emitJavadoc) {
             out.javadoc(javadocFor(message, fields));
         }
-        if (fields.isEmpty()) {
+        List<String> components = new ArrayList<>();
+        for (Defs.FieldDef f : fields) {
+            components.add(Types.componentType(f, javaPackage) + " " + Names.fieldName(f.name()));
+        }
+        if (unknownComponent() != null) {
+            components.add("byte[] " + unknownComponent());
+        }
+        if (components.isEmpty()) {
             out.line("public record " + message.name() + "() {");
         } else {
             out.line("public record " + message.name() + "(");
             out.indent();
             out.indent();
-            for (int i = 0; i < fields.size(); i++) {
-                Defs.FieldDef f = fields.get(i);
-                out.line(Types.componentType(f, javaPackage) + " " + Names.fieldName(f.name())
-                        + (i < fields.size() - 1 ? "," : ") {"));
+            for (int i = 0; i < components.size(); i++) {
+                out.line(components.get(i) + (i < components.size() - 1 ? "," : ") {"));
             }
             out.outdent();
             out.outdent();
         }
         out.indent();
+
+        emitValidationSwitch(out);
 
         emitPatternConstants(out, fields);
         emitCompactConstructor(out, message, fields);
@@ -151,8 +165,30 @@ final class MessageEmitter {
         return f.kind() == Defs.Kind.SCALAR && f.scalar() == ScalarType.STRING;
     }
 
+    /**
+     * The runtime half of the validation controls: a {@code static final} the JIT folds away, so switching
+     * validation off with {@code -Dprotogen.validation=false} costs nothing at all. Only an explicit
+     * {@code false} disables it, so a typo in the property leaves the checks running.
+     */
+    private void emitValidationSwitch(Java out) {
+        if (!options.emitValidation()) {
+            return;
+        }
+        out.blank();
+        if (emitJavadoc) {
+            out.javadoc("""
+                    Whether the constraints declared in the schema are enforced.
+
+                    <p>Set {@code -Dprotogen.validation=false} to turn them off for the whole JVM, for
+                    instance when reading legacy data that predates a constraint. Any other value, or none,
+                    leaves them on.""");
+        }
+        out.line("private static final boolean PROTOGEN_VALIDATION = !\"false\".equalsIgnoreCase("
+                + "System.getProperty(\"protogen.validation\", \"true\"));");
+    }
+
     private void emitCompactConstructor(Java out, Defs.MessageDef message, List<Defs.FieldDef> fields) {
-        if (fields.isEmpty()) {
+        if (fields.isEmpty() && unknownComponent() == null) {
             return;
         }
         List<String> body = new ArrayList<>();
@@ -175,14 +211,21 @@ final class MessageEmitter {
                 body.add(n + " = " + n + " == null ? null : " + n + ".clone();");
             }
         }
+        if (unknownComponent() != null) {
+            String u = unknownComponent();
+            body.add(u + " = " + u + " == null ? new byte[0] : " + u + ".clone();");
+        }
+        // a oneof invariant is structural, not schema validation, so it is never switched off
         List<String> checks = new ArrayList<>(oneofChecks(message, fields));
-        checks.addAll(validationChecks(message, fields));
-        if (body.isEmpty() && checks.isEmpty()) {
+        List<String> schemaChecks = options.emitValidation()
+                ? validationChecks(message, fields)
+                : List.of();
+        if (body.isEmpty() && checks.isEmpty() && schemaChecks.isEmpty()) {
             return;
         }
         out.blank();
         if (emitJavadoc) {
-            out.javadoc(checks.isEmpty()
+            out.javadoc(checks.isEmpty() && schemaChecks.isEmpty()
                     ? "Normalises absent values to their proto3 defaults and makes collections unmodifiable."
                     : """
                     Normalises absent values to their proto3 defaults, makes collections unmodifiable and
@@ -193,10 +236,17 @@ final class MessageEmitter {
         out.line("public " + message.name() + " {");
         out.indent();
         body.forEach(out::line);
-        if (!body.isEmpty() && !checks.isEmpty()) {
+        if (!body.isEmpty() && !(checks.isEmpty() && schemaChecks.isEmpty())) {
             out.blank();
         }
         checks.forEach(out::line);
+        if (!schemaChecks.isEmpty()) {
+            out.line("if (PROTOGEN_VALIDATION) {");
+            out.indent();
+            schemaChecks.forEach(out::line);
+            out.outdent();
+            out.line("}");
+        }
         out.outdent();
         out.line("}");
     }
@@ -330,6 +380,12 @@ final class MessageEmitter {
         return f.kind() == Defs.Kind.SCALAR && f.scalar() == ScalarType.BYTES;
     }
 
+    /** @return whether this message will actually carry schema-declared checks */
+    private boolean hasValidation(Defs.MessageDef message) {
+        return options.emitValidation()
+                && message.fields().stream().anyMatch(f -> f.constraints().hasValidation());
+    }
+
     private static String numberLiteral(Defs.FieldDef f, java.math.BigDecimal value) {
         return switch (f.scalar()) {
             case DOUBLE -> value.toPlainString() + "D";
@@ -387,13 +443,15 @@ final class MessageEmitter {
         String name = message.name();
         String r = locals.reader;
 
+        // only promise constraint enforcement where the checks are actually generated
+        String throwsClause = hasValidation(message)
+                ? "@throws IllegalArgumentException if the input is truncated, malformed, or violates a\n"
+                + "constraint declared in the schema"
+                : "@throws IllegalArgumentException if the input is truncated or malformed";
+
         out.blank();
         if (emitJavadoc) {
-            out.javadoc(("""
-                    Parses a %s from its protobuf encoding.
-
-                    @throws IllegalArgumentException if the input is truncated, malformed, or violates a
-                    constraint declared in the schema""").formatted(name));
+            out.javadoc("Parses a %s from its protobuf encoding.\n\n%s".formatted(name, throwsClause));
         }
         out.line("public static " + name + " parseFrom(byte[] " + locals.data + ") {");
         out.line("    return parseFrom(" + locals.data + ", 0, " + locals.data + ".length);");
@@ -401,11 +459,8 @@ final class MessageEmitter {
 
         out.blank();
         if (emitJavadoc) {
-            out.javadoc(("""
-                    Parses a %s from {@code %s} bytes starting at {@code %s}.
-
-                    @throws IllegalArgumentException if the input is truncated, malformed, or violates a
-                    constraint declared in the schema""").formatted(name, locals.length, locals.offset));
+            out.javadoc("Parses a %s from {@code %s} bytes starting at {@code %s}.\n\n%s"
+                    .formatted(name, locals.length, locals.offset, throwsClause));
         }
         out.line("public static " + name + " parseFrom(byte[] " + locals.data + ", int " + locals.offset
                 + ", int " + locals.length + ") {");
@@ -423,6 +478,9 @@ final class MessageEmitter {
             String init = f.repeated() || f.kind() == Defs.Kind.MAP ? "null" : Types.defaultExpr(f, javaPackage);
             out.line(type + " " + Names.fieldName(f.name()) + " = " + init + ";");
         }
+        if (unknownComponent() != null) {
+            out.line("ProtoWire.U " + locals.unknown + " = null;");
+        }
         out.line("int " + locals.tag + ";");
         out.line("while ((" + locals.tag + " = " + r + ".tag()) != 0) {");
         out.indent();
@@ -431,19 +489,32 @@ final class MessageEmitter {
         for (Defs.FieldDef f : fields) {
             emitParseCase(out, f);
         }
-        out.line("default -> " + r + ".skip(" + locals.tag + ");");
+        if (unknownComponent() != null) {
+            out.line("default -> " + locals.unknown + " = " + r + ".copyField(" + locals.tag + ", "
+                    + locals.unknown + ");");
+        } else {
+            out.line("default -> " + r + ".skip(" + locals.tag + ");");
+        }
         out.outdent();
         out.line("}");
         out.outdent();
         out.line("}");
-        if (fields.isEmpty()) {
+
+        List<String> arguments = new ArrayList<>();
+        for (Defs.FieldDef f : fields) {
+            arguments.add(Names.fieldName(f.name()));
+        }
+        if (unknownComponent() != null) {
+            arguments.add(locals.unknown + " == null ? new byte[0] : " + locals.unknown + ".toByteArray()");
+        }
+        if (arguments.isEmpty()) {
             out.line("return new " + name + "();");
         } else {
             out.line("return new " + name + "(");
             out.indent();
             out.indent();
-            for (int i = 0; i < fields.size(); i++) {
-                out.line(Names.fieldName(fields.get(i).name()) + (i < fields.size() - 1 ? "," : ");"));
+            for (int i = 0; i < arguments.size(); i++) {
+                out.line(arguments.get(i) + (i < arguments.size() - 1 ? "," : ");"));
             }
             out.outdent();
             out.outdent();
@@ -622,6 +693,9 @@ final class MessageEmitter {
         for (Defs.FieldDef f : fields) {
             emitSizeFor(out, f);
         }
+        if (unknownComponent() != null) {
+            out.line(locals.size + " += " + unknownComponent() + ".length;");
+        }
         out.line("return " + locals.size + ";");
         out.outdent();
         out.line("}");
@@ -774,6 +848,17 @@ final class MessageEmitter {
         for (Defs.FieldDef f : fields) {
             emitWriteFor(out, f);
         }
+        if (unknownComponent() != null) {
+            // appended verbatim, after the known fields; protobuf places no ordering requirement on tags
+            String u = unknownComponent();
+            out.line("if (" + u + ".length > 0) {");
+            out.indent();
+            out.line("System.arraycopy(" + u + ", 0, " + locals.target + ", " + locals.offset + ", "
+                    + u + ".length);");
+            out.line(locals.offset + " += " + u + ".length;");
+            out.outdent();
+            out.line("}");
+        }
         out.line("return " + locals.offset + ";");
         out.outdent();
         out.line("}");
@@ -924,8 +1009,20 @@ final class MessageEmitter {
         List<Defs.FieldDef> byteFields = fields.stream()
                 .filter(f -> isBytes(f) && !f.repeated())
                 .toList();
-        if (byteFields.isEmpty()) {
+        if (byteFields.isEmpty() && unknownComponent() == null) {
             return;
+        }
+
+        // every component compared by value, in declaration order, with the unknown bytes last
+        List<String> names = new ArrayList<>();
+        List<Boolean> isArray = new ArrayList<>();
+        for (Defs.FieldDef f : fields) {
+            names.add(Names.fieldName(f.name()));
+            isArray.add(isBytes(f) && !f.repeated());
+        }
+        if (unknownComponent() != null) {
+            names.add(unknownComponent());
+            isArray.add(true);
         }
 
         for (Defs.FieldDef f : byteFields) {
@@ -942,6 +1039,20 @@ final class MessageEmitter {
             }
             out.line("}");
         }
+        if (unknownComponent() != null) {
+            String u = unknownComponent();
+            out.blank();
+            if (emitJavadoc) {
+                out.javadoc("""
+                        The encoded bytes of any field this build does not know, kept so a message written
+                        against a newer schema survives a round trip unchanged.
+
+                        @return a copy, so the message stays immutable""");
+            }
+            out.line("public byte[] " + u + "() {");
+            out.line("    return " + u + ".clone();");
+            out.line("}");
+        }
 
         out.blank();
         out.line("@Override");
@@ -954,9 +1065,9 @@ final class MessageEmitter {
         out.line("    return false;");
         out.line("}");
         List<String> comparisons = new ArrayList<>();
-        for (Defs.FieldDef f : fields) {
-            String n = Names.fieldName(f.name());
-            comparisons.add(isBytes(f) && !f.repeated()
+        for (int i = 0; i < names.size(); i++) {
+            String n = names.get(i);
+            comparisons.add(isArray.get(i)
                     ? "java.util.Arrays.equals(this." + n + ", " + locals.other + "." + n + ")"
                     : "java.util.Objects.equals(this." + n + ", " + locals.other + "." + n + ")");
         }
@@ -969,9 +1080,9 @@ final class MessageEmitter {
         out.line("public int hashCode() {");
         out.indent();
         out.line("int " + locals.result + " = 1;");
-        for (Defs.FieldDef f : fields) {
-            String n = Names.fieldName(f.name());
-            out.line(locals.result + " = 31 * " + locals.result + " + " + (isBytes(f) && !f.repeated()
+        for (int i = 0; i < names.size(); i++) {
+            String n = names.get(i);
+            out.line(locals.result + " = 31 * " + locals.result + " + " + (isArray.get(i)
                     ? "java.util.Arrays.hashCode(" + n + ")"
                     : "java.util.Objects.hashCode(" + n + ")") + ";");
         }
@@ -984,9 +1095,9 @@ final class MessageEmitter {
         out.line("public String toString() {");
         out.indent();
         List<String> parts = new ArrayList<>();
-        for (Defs.FieldDef f : fields) {
-            String n = Names.fieldName(f.name());
-            parts.add("\"" + n + "=\" + " + (isBytes(f) && !f.repeated()
+        for (int i = 0; i < names.size(); i++) {
+            String n = names.get(i);
+            parts.add("\"" + n + "=\" + " + (isArray.get(i)
                     ? "java.util.Arrays.toString(" + n + ")" : n));
         }
         out.line("return \"" + message.name() + "[\" + " + String.join("\n        + \", \" + ", parts)

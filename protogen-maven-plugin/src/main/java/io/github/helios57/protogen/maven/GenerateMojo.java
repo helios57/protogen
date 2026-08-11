@@ -4,6 +4,7 @@ import io.github.helios57.protogen.compiler.ProtoCompileException;
 import io.github.helios57.protogen.compiler.ProtoCompiler;
 import io.github.helios57.protogen.compiler.gen.JavaGenerator;
 import io.github.helios57.protogen.compiler.model.ProtoFile;
+import org.apache.maven.model.Resource;
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugins.annotations.LifecyclePhase;
@@ -55,6 +56,40 @@ public class GenerateMojo extends AbstractMojo {
     @Parameter(property = "protogen.emitJavadoc", defaultValue = "true")
     boolean emitJavadoc;
 
+    /**
+     * Keep the encoded bytes of fields this build does not know in a trailing {@code unknownFields}
+     * component, so a message written against a newer schema survives a round trip unchanged.
+     * <p>
+     * Off by default: it adds a component to every record, which shows up in the constructor, in
+     * {@code equals} and in {@code toString}. Turn it on for a service that relays messages it does not
+     * fully own.
+     */
+    @Parameter(property = "protogen.preserveUnknownFields", defaultValue = "false")
+    boolean preserveUnknownFields;
+
+    /**
+     * Generate the checks declared by the schema's {@code @Minimum} / {@code @Pattern} style annotations.
+     * <p>
+     * This is the compile-time half of the validation controls; the generated code carries a second,
+     * runtime switch ({@code -Dprotogen.validation=false}) that turns the same checks off without
+     * regenerating. Set this to {@code false} to emit no checks at all.
+     */
+    @Parameter(property = "protogen.emitValidation", defaultValue = "true")
+    boolean emitValidation;
+
+    /**
+     * Write a JSON sidecar per {@code .proto} to {@code META-INF/protogen/}, describing the
+     * {@code @Example} values, the {@code @RootNode} markers, the constraints and the Java names each
+     * declaration ended up with - for a documentation pipeline to consume without re-parsing the schema.
+     */
+    @Parameter(property = "protogen.emitSchemaMetadata", defaultValue = "true")
+    boolean emitSchemaMetadata;
+
+    /** Where the schema metadata sidecars are written; added to the project's resources. */
+    @Parameter(property = "protogen.resourceOutputDirectory",
+            defaultValue = "${project.build.directory}/generated-resources/protogen")
+    File resourceOutputDirectory;
+
     /** Fail the build on constructs protogen does not support, instead of skipping them. */
     @Parameter(property = "protogen.failOnUnsupported", defaultValue = "true")
     boolean failOnUnsupported;
@@ -85,8 +120,8 @@ public class GenerateMojo extends AbstractMojo {
         }
         getLog().info("protogen: " + protoFiles.size() + " .proto file(s) under " + sourceRoot);
 
-        ProtoCompiler compiler = new ProtoCompiler(
-                new ProtoCompiler.Options(javaPackage, emitJavadoc, failOnUnsupported));
+        ProtoCompiler compiler = new ProtoCompiler(new ProtoCompiler.Options(javaPackage, emitJavadoc,
+                failOnUnsupported, preserveUnknownFields, emitValidation, emitSchemaMetadata));
 
         List<JavaGenerator.GeneratedFile> generated;
         try {
@@ -100,21 +135,35 @@ public class GenerateMojo extends AbstractMojo {
             throw new MojoExecutionException(e.getMessage(), e);
         }
 
-        Path outDir = outputDirectory.toPath();
+        Path sourceDir = outputDirectory.toPath();
+        Path resourceDir = resourceOutputDirectory.toPath();
+        int sources = 0;
+        int resources = 0;
         try {
-            Files.createDirectories(outDir);
             for (JavaGenerator.GeneratedFile file : generated) {
-                Path target = outDir.resolve(file.relativePath());
+                boolean isSource = file.kind() == JavaGenerator.Kind.SOURCE;
+                Path target = (isSource ? sourceDir : resourceDir).resolve(file.relativePath());
                 Files.createDirectories(target.getParent());
                 Files.writeString(target, file.content(), StandardCharsets.UTF_8);
                 getLog().debug("protogen: wrote " + target);
+                if (isSource) {
+                    sources++;
+                } else {
+                    resources++;
+                }
             }
         } catch (IOException e) {
-            throw new MojoExecutionException("protogen: cannot write generated sources to " + outDir, e);
+            throw new MojoExecutionException("protogen: cannot write generated output", e);
         }
-        getLog().info("protogen: generated " + generated.size() + " Java file(s) into " + outDir);
+        getLog().info("protogen: generated " + sources + " Java file(s) into " + sourceDir);
 
-        project.addCompileSourceRoot(outDir.toString());
+        project.addCompileSourceRoot(sourceDir.toString());
+        if (resources > 0) {
+            getLog().info("protogen: generated " + resources + " metadata file(s) into " + resourceDir);
+            Resource resource = new Resource();
+            resource.setDirectory(resourceDir.toString());
+            project.addResource(resource);
+        }
     }
 
     private List<Path> discover(Path sourceRoot) throws MojoExecutionException {
