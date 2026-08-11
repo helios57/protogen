@@ -1,0 +1,11 @@
+target/
+.idea/
+*.iml
+*.ipr
+*.iws
+.classpath
+.project
+.settings/
+.vscode/
+.DS_Store
+.flattened-pom.xml

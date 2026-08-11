@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package io.github.helios57.protogen.it;
+
+option java_multiple_files = true;
+option java_package = "io.github.helios57.protogen.it.model";
+
+/**
+ * Every proto3 scalar type, once. Baseline for the phase 2 round-trip tests.
+ */
+message ScalarsV1 {
+  // A plain string with implicit presence: absent and "" are indistinguishable on the wire.
+  // @Example hello
+  string text = 1;
+
+  bool flag = 2;
+  int32 i32 = 3;
+  int64 i64 = 4;
+  uint32 u32 = 5;
+  uint64 u64 = 6;
+  sint32 s32 = 7;
+  sint64 s64 = 8;
+  fixed32 f32 = 9;
+  fixed64 f64 = 10;
+  sfixed32 sf32 = 11;
+  sfixed64 sf64 = 12;
+  float real32 = 13;
+  double real64 = 14;
+  bytes blob = 15;
+
+  // Explicit presence: hasOptionalText() must distinguish unset from "".
+  optional string optionalText = 20;
+  optional int32 optionalNumber = 21;
+}

@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package io.github.helios57.protogen.it;
+
+option java_multiple_files = true;
+option java_package = "io.github.helios57.protogen.it.model";
+
+import "Nested.proto";
+
+/**
+ * oneof and cross-file imports. Not used by the current surveyed protos, but retrofitting a oneof into a
+ * generator that never had one is expensive - so it is in scope from phase 3.
+ */
+message EventV1 {
+  string eventId = 1;
+
+  oneof payload {
+    string message = 2;
+    int64 counter = 3;
+    NodeV1 node = 4;
+  }
+
+  reserved 5, 6;
+  reserved "legacyField";
+}
