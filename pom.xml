@@ -15,8 +15,9 @@
 
     <licenses>
         <license>
-            <name>Apache License, Version 2.0</name>
-            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+            <name>MIT License</name>
+            <url>https://opensource.org/licenses/MIT</url>
+            <distribution>repo</distribution>
         </license>
     </licenses>
 
@@ -25,6 +26,7 @@
         <module>protogen-maven-plugin</module>
         <module>protogen-it</module>
         <module>protogen-interop</module>
+        <module>protogen-benchmark</module>
     </modules>
 
     <properties>

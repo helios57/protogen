@@ -1,5 +1,7 @@
 # protogen
 
+[![build](https://github.com/helios57/protogen/actions/workflows/build.yml/badge.svg)](https://github.com/helios57/protogen/actions/workflows/build.yml)
+
 **A Maven plugin that generates optimized, fully self-contained Java 17+ sources from `.proto` files.**
 
 Generated code compiles and runs against the **JDK alone** — no `protobuf-java`, no Netty, no runtime jar
@@ -113,6 +115,7 @@ equivalence is asserted byte for byte in `protogen-interop`, not assumed.
 | `protogen-maven-plugin` | The `protogen:generate` Mojo. |
 | `protogen-it` | The zero-dependency proof: no compile-scope dependencies, generated code compiled and exercised. |
 | `protogen-interop` | The differential proof: the same schemas compiled by `protoc`, encodings compared byte for byte. |
+| `protogen-benchmark` | JMH benchmarks against `protobuf-java` on the same schemas. |
 
 ## Building
 
@@ -120,7 +123,25 @@ equivalence is asserted byte for byte in `protogen-interop`, not assumed.
 mvn verify
 ```
 
-Requires JDK 17+ and Maven 3.9+.
+Requires JDK 17+ and Maven 3.9+. CI runs the same build on JDK 17, 21 and 25, and asserts that
+`protogen-it` still has no compile-scope dependencies.
+
+## Performance
+
+Measured against `protobuf-java` on identical schemas — full numbers and caveats in
+**[BENCHMARKS.md](BENCHMARKS.md)**.
+
+| | protogen vs protobuf-java |
+|---|---|
+| Build a flat message and encode it | **2.4× faster** |
+| Decode | **1.1–1.2× faster**, at every nesting depth |
+| Encode the *same instance* repeatedly, nested 5 deep | **2.1× slower** — protobuf-java memoises its size, a record has nowhere to cache |
+| Schemas with `@Pattern` constraints | slower by the cost of the regex, which buys a guarantee protobuf-java does not offer |
+
+```bash
+mvn -Pbenchmark package -DskipTests
+java -jar protogen-benchmark/target/benchmarks.jar
+```
 
 ## Scope
 
@@ -135,4 +156,4 @@ build with a `file:line:col` diagnostic rather than generating something wrong.
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).

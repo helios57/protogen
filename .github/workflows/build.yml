@@ -4,20 +4,85 @@ on:
   push:
     branches: [ main ]
   pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   build:
+    name: JDK ${{ matrix.java }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        java: [ '17', '21' ]
+        java: [ '17', '21', '25' ]
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: ${{ matrix.java }}
           cache: maven
+
+      # Builds the compiler and the plugin, generates from the sample schemas, compiles the generated
+      # sources with no compile-scope dependencies, and runs the differential suite against protoc.
       - name: Build and verify
         run: mvn -B -ntp verify
+
+      # The headline claim, asserted against the artifact rather than the source tree: nothing but the JDK
+      # is on protogen-it's compile classpath. If a dependency ever creeps in, this fails loudly.
+      - name: Assert the generated code has no compile dependencies
+        run: |
+          set -euo pipefail
+          rm -f compile-deps.txt
+          mvn -B -ntp -q -pl protogen-it dependency:list -DincludeScope=compile \
+            -DoutputFile="$PWD/compile-deps.txt"
+          # a failed resolution would leave no file at all, which must not read as success
+          if [ ! -f compile-deps.txt ]; then
+            echo "::error::dependency:list produced no output; the check did not actually run"
+            exit 1
+          fi
+          # a resolved dependency prints as "   groupId:artifactId:jar:version:scope";
+          # with none, the file says "   none"
+          if grep -qE '^[[:space:]]+[^[:space:]:]+:[^[:space:]:]+:[^[:space:]:]+:' compile-deps.txt; then
+            echo "::error::protogen-it gained a compile-scope dependency:"
+            cat compile-deps.txt
+            exit 1
+          fi
+          echo "protogen-it has no compile-scope dependencies, as intended"
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports-jdk${{ matrix.java }}
+          path: '**/target/surefire-reports/**'
+          retention-days: 7
+
+  benchmark-smoke:
+    name: Benchmark smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # Not a measurement - one iteration only, purely so the benchmarks cannot rot unnoticed.
+      # Real numbers come from the `benchmark` workflow, which needs a quiet machine to mean anything.
+      - name: Build the JMH jar
+        run: mvn -B -ntp -q -Pbenchmark package -DskipTests
+
+      - name: Run one iteration of every benchmark
+        run: |
+          java -jar protogen-benchmark/target/benchmarks.jar \
+            -f 1 -wi 1 -i 1 -r 1s -w 1s -p depth=1 -p items=10

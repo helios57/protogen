@@ -210,15 +210,20 @@ encoded as one, `-0.0` skipped as if it were the default, and `Timestamp` presen
 | **3** | `repeated` packed and unpacked, `map`, `oneof`, `Instant`, validation | ✅ |
 | **4** | Mojo hardening: includes/excludes, offline, multi-module | ✅ |
 | **5** | Verification: zero-dependency compile and run, differential vs protoc, fuzz | ✅ |
-| **6** | Optimization: JMH harness, size memoisation if justified, UTF-8 fast path | open |
+| **6** | Optimization: JMH harness against protobuf-java, CI | ✅ harness and numbers; size memoisation still to do |
 | **7** | Release: incremental regeneration, semantic versioning, publish | open |
+
+Measured results and how to read them: [BENCHMARKS.md](BENCHMARKS.md).
 
 ## 10. Open questions
 
 1. **Unknown-field preservation** — worth an opt-in that adds a trailing component, or is dropping them the
    right trade for record cleanliness?
-2. **`protoSize()` memoisation** — records forbid a cached field. Accept the recomputation, or generate a
-   non-record final class behind a flag for deep trees?
+2. ~~**`protoSize()` memoisation**~~ — **answered by measurement.** It costs nothing at depth 1, 1.5× at
+   depth 3 and 2.1× at depth 5 when the same instance is serialized repeatedly, and nothing at all when a
+   message is serialized once. Worth fixing, and without giving up records: have `toByteArray()` compute
+   child sizes once into a scratch array and thread it through `writeTo`, rather than caching per instance.
+   See [BENCHMARKS.md](BENCHMARKS.md).
 3. **Validation on parse** — currently a parsed message that violates a constraint is rejected. Should
    there be a lenient parse for reading legacy data?
 4. **`@Example` / `@RootNode`** — currently Javadoc only. Should they feed the existing AsyncAPI
