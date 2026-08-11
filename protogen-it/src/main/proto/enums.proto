@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package protogen.it;
+
+option java_multiple_files = true;
+option java_package = "protogen.it.model";
+
+/**
+ * A top-level enum using the UNSPECIFIED-at-zero convention.
+ */
+enum StageEnumV1 {
+  STAGE_ENUM_V1_UNSPECIFIED = 0;
+  DEV = 1;
+  TEST = 2;
+  INT = 3;
+  PROD = 4;
+}
+
+/**
+ * An enum whose constants are lower case, as some surveyed schemas declare them.
+ */
+enum StatusEnumV1 {
+  passive = 0;
+  passive_candidate = 1;
+  active = 2;
+  active_released = 3;
+}
+
+/**
+ * An enum with aliases, which requires the allow_alias option.
+ */
+enum AliasedEnumV1 {
+  option allow_alias = true;
+  ALIAS_UNSPECIFIED = 0;
+  ORIGINAL = 1;
+  SYNONYM = 1;
+}
+
+message EnumHolderV1 {
+  StageEnumV1 stage = 1;
+  StatusEnumV1 status = 2;
+  AliasedEnumV1 aliased = 3;
+  optional StageEnumV1 optionalStage = 4;
+  repeated StageEnumV1 stages = 5;
+}

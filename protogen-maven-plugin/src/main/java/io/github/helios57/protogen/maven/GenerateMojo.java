@@ -2,6 +2,7 @@ package io.github.helios57.protogen.maven;
 
 import io.github.helios57.protogen.compiler.ProtoCompileException;
 import io.github.helios57.protogen.compiler.ProtoCompiler;
+import io.github.helios57.protogen.compiler.gen.JavaGenerator;
 import io.github.helios57.protogen.compiler.model.ProtoFile;
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecutionException;
@@ -50,14 +51,6 @@ public class GenerateMojo extends AbstractMojo {
     @Parameter(property = "protogen.javaPackage")
     String javaPackage;
 
-    /** Package receiving the generated {@code ProtoWire} codec. Defaults to the common java package + {@code .protogen}. */
-    @Parameter(property = "protogen.runtimePackage")
-    String runtimePackage;
-
-    /** Keep unknown fields so messages survive a round trip through an older schema. */
-    @Parameter(property = "protogen.preserveUnknownFields", defaultValue = "true")
-    boolean preserveUnknownFields;
-
     /** Carry leading {@code .proto} comments into the generated Javadoc. */
     @Parameter(property = "protogen.emitJavadoc", defaultValue = "true")
     boolean emitJavadoc;
@@ -92,32 +85,34 @@ public class GenerateMojo extends AbstractMojo {
         }
         getLog().info("protogen: " + protoFiles.size() + " .proto file(s) under " + sourceRoot);
 
-        ProtoCompiler compiler = new ProtoCompiler(new ProtoCompiler.Options(
-                javaPackage, runtimePackage, preserveUnknownFields, emitJavadoc, failOnUnsupported));
+        ProtoCompiler compiler = new ProtoCompiler(
+                new ProtoCompiler.Options(javaPackage, emitJavadoc, failOnUnsupported));
 
-        List<ProtoFile> parsed;
+        List<JavaGenerator.GeneratedFile> generated;
         try {
-            parsed = compiler.parse(protoFiles);
+            List<ProtoFile> parsed = compiler.parse(protoFiles);
+            for (ProtoFile file : parsed) {
+                getLog().info("  " + file.fileName() + " -> package " + file.javaPackage()
+                        + " (" + (file.messages().size() + file.enums().size()) + " type(s))");
+            }
+            generated = compiler.generate(compiler.link(parsed));
         } catch (ProtoCompileException e) {
             throw new MojoExecutionException(e.getMessage(), e);
-        }
-        for (ProtoFile file : parsed) {
-            getLog().info("  " + file.fileName() + " -> package " + file.javaPackage()
-                    + " (" + file.types().size() + " type(s))");
         }
 
         Path outDir = outputDirectory.toPath();
         try {
             Files.createDirectories(outDir);
-            for (ProtoCompiler.GeneratedFile generated : compiler.generate(parsed)) {
-                Path target = outDir.resolve(generated.relativePath());
+            for (JavaGenerator.GeneratedFile file : generated) {
+                Path target = outDir.resolve(file.relativePath());
                 Files.createDirectories(target.getParent());
-                Files.writeString(target, generated.content(), StandardCharsets.UTF_8);
+                Files.writeString(target, file.content(), StandardCharsets.UTF_8);
                 getLog().debug("protogen: wrote " + target);
             }
         } catch (IOException e) {
             throw new MojoExecutionException("protogen: cannot write generated sources to " + outDir, e);
         }
+        getLog().info("protogen: generated " + generated.size() + " Java file(s) into " + outDir);
 
         project.addCompileSourceRoot(outDir.toString());
     }

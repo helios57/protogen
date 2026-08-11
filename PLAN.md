@@ -1,4 +1,4 @@
-# protogen — implementation plan
+# protogen — design and plan
 
 **Goal:** a Maven plugin that turns `.proto` files into **optimized, fully self-contained Java 17+ sources**.
 Generated code compiles and runs against the **JDK only** — no `protobuf-java`, no Netty, no `protogen` jar.
@@ -6,205 +6,220 @@ The build itself needs no native `protoc`.
 
 See [RESEARCH.md](RESEARCH.md) for why this does not exist yet.
 
+**Status:** phases 0–5 are done. proto3 messages generate, round-trip, and are byte-identical to `protoc`
+across 310 tests. Phase 6 (benchmarking) and phase 7 (release) are open.
+
 ---
 
 ## 1. Non-negotiable invariants
 
 | # | Invariant | Enforced by |
 |---|---|---|
-| I1 | Generated sources import **only** `java.*` | `ImportPurityTest` — scans every generated `.java` for non-`java.` imports and FQNs |
-| I2 | Wire format is byte-identical to `protoc` | differential tests vs `protobuf-java` (**test scope only**) |
-| I3 | The IT module has **zero compile-scope dependencies** | `maven-enforcer-plugin` `banTransitiveDependencies` + explicit check |
-| I4 | No reflection, no `Class.forName`, no descriptor bootstrap in generated code | `ImportPurityTest` + review |
-| I5 | Build requires no `protoc` binary and no network-fetched toolchain | own parser |
-
-I1 and I3 are the whole point of the project. They get automated tests in Phase 1, before there is anything to test.
+| I1 | Generated sources import **only** `java.*` | `ImportPurityTest`, plus a check for fully qualified names, which an import-only scan would miss |
+| I2 | Wire format is byte-identical to `protoc` | `protogen-interop` — the same schema compiled by both, compared byte for byte |
+| I3 | The IT module has **zero compile-scope dependencies** | `protogen-it/pom.xml` declares none; the generated code compiles and runs there |
+| I4 | No reflection, no `Class.forName`, no descriptor bootstrap | `ImportPurityTest` |
+| I5 | No `protoc` binary and no network toolchain in the plugin | protogen owns its parser |
+| I6 | Messages are **immutable** | records, defensive copies, unmodifiable collections |
+| I7 | The codec carries **only what the schema uses** | `JavaGeneratorTest` asserts absent helpers, not just present ones |
 
 ## 2. Module layout
 
 ```
 protogen/
-├── pom.xml                     parent — Java 17, dependency & plugin management
-├── protogen-compiler/          pure library: .proto  ->  Java source text
-│   ├── lexer/  parser/  ast/   front-end (no deps)
-│   ├── model/                  linked/resolved schema model
-│   └── gen/                    emitters (message, enum, wire-codec, builder)
-├── protogen-maven-plugin/      the Mojo — thin wrapper over protogen-compiler
-└── protogen-it/                integration tests: sample .proto -> generate -> compile -> assert
+├── protogen-compiler/          pure library: .proto -> Java source text, no dependencies
+│   ├── lexer/ parser/          hand-written front-end, comment-retaining
+│   ├── model/ linker/          declaration tree, symbol table, type resolution
+│   └── gen/                    emitters: codec, message, enum
+├── protogen-maven-plugin/      the protogen:generate Mojo, a thin wrapper
+├── protogen-it/                zero-dependency proof: generate -> compile -> run
+└── protogen-interop/           differential tests against protoc + protobuf-java
 ```
 
-`protogen-compiler` is deliberately free of Maven types so it can later be driven from a CLI, Gradle, or a test
-harness. `protogen-maven-plugin` only does file discovery, staleness checks and `addCompileSourceRoot`.
+`protogen-compiler` holds no Maven types, so the same compiler can drive a CLI or a Gradle plugin later.
 
-## 3. Generated API contract
+## 3. The generated API
 
-For `message BrokerMonitoringV1` with `java_package = protogen.it.model`, `java_multiple_files = true`:
+For `message NodeV1` with `java_package = protogen.it.model`, `java_multiple_files = true`:
 
 ```java
-package protogen.it.model;
+public record NodeV1(
+        String name,                          // implicit presence -> "" default, never null
+        StageEnumV1 stage,                    // enum default is the constant numbered 0
+        String stageSuffix,                   // `optional` -> nullable
+        List<NodeV1> children,                // unmodifiable, never null
+        List<Integer> ports,
+        Map<String, String> endpoints,        // unmodifiable, insertion ordered
+        CoordinatesV1 location,               // message presence -> nullable
+        Instant createdAt) {                  // google.protobuf.Timestamp -> Instant
 
-public final class BrokerMonitoringV1 {
+    public NodeV1 { /* normalise nulls, copy collections, enforce schema constraints */ }
 
-    // ---- construction -------------------------------------------------
-    public static Builder newBuilder();
-    public static Builder newBuilder(BrokerMonitoringV1 prototype);
-    public Builder toBuilder();
-
-    // ---- accessors ----------------------------------------------------
-    public String getTmsAbbl1();              // implicit presence -> "" default, never null
-    public boolean hasStageSuffix();          // explicit `optional` -> presence tracked
-    public String getStageSuffix();
-    public StageEnum getStage();              // enum -> real Java enum + UNRECOGNIZED
-    public int getStageValue();               // raw wire value, for forward compatibility
-    public List<BrokerMonitoringV1> getMonitoredBrokersList();   // unmodifiable
-    public Map<String, String> getSempUrlsMap();                 // unmodifiable
-
-    // ---- serialization ------------------------------------------------
-    public static BrokerMonitoringV1 parseFrom(byte[] data);
-    public static BrokerMonitoringV1 parseFrom(byte[] data, int off, int len);
-    public static BrokerMonitoringV1 parseFrom(ByteBuffer buf);
-    public static BrokerMonitoringV1 parseFrom(InputStream in) throws IOException;
+    public static NodeV1 parseFrom(byte[] data);
+    public static NodeV1 parseFrom(byte[] data, int offset, int length);
     public byte[] toByteArray();
-    public int writeTo(byte[] target, int offset);
-    public void writeTo(OutputStream out) throws IOException;
-    public int getSerializedSize();           // cached
-
-    // ---- value semantics ----------------------------------------------
-    public boolean equals(Object o);          // deep, Arrays.equals for bytes
-    public int hashCode();                    // cached
-    public String toString();                 // protobuf-ish text form, for logs
-
-    public static final class Builder { /* fluent setters, addX, putX, build() */ }
+    public int writeTo(byte[] target, int offset);   // returns the new position
+    public int protoSize();
 }
 ```
 
-**Decisions:**
+### Why these choices
 
-* **Immutable message + nested `Builder`.** Matches `protobuf-java` ergonomics so migrating an existing service
-  is a package rename, not a rewrite. A mutable/reusable "zero-allocation" mode (QuickBuffers-style) is a later
-  opt-in flag, not the default.
-* **Not a `record`.** `bytes` fields are `byte[]`; record-generated `equals`/`hashCode` would compare by identity.
-  We emit explicit `equals`/`hashCode`/`toString`.
-* **proto3 semantics are honoured, not approximated:** implicit-presence scalars are omitted from the wire when
-  equal to the default; fields declared `optional` get a real presence bit.
-* **Unknown fields are preserved** (raw `byte[]` tail, re-emitted in tag order) — required for round-tripping
-  through a service that has an older schema. Opt-out flag `preserveUnknownFields=false` for minimum footprint.
-* **Enums** become Java enums plus an `UNRECOGNIZED` constant and `forNumber(int)` / `getNumber()`, so an unknown
-  wire value never throws.
+* **Records, always immutable.** No mutable or reusable message mode. The compact constructor normalises
+  absent values to their proto3 defaults, copies collections into unmodifiable views and copies `byte[]`
+  on the way in *and* on the way out, so a message cannot be mutated after construction.
+* **No builder.** Records plus the canonical constructor are the whole surface. Test-side builders live in
+  the tests that need them, not in every generated class.
+* **`byte[]` components** force explicit `equals`/`hashCode`/`toString`, which the generator emits only for
+  the messages that have them — the record defaults would compare arrays by identity.
+* **Nothing shared between packages.** Every Java package gets its own package-private `ProtoWire`. The
+  public surface of a message is expressed in `byte[]` and `int` alone, so a message in one package can
+  nest a message from another without the two packages sharing a single type.
+* **The codec is pruned.** `Feature` collects what a package's fields actually need and closes over the
+  dependencies; `CodecEmitter` emits only those methods. A string-only schema gets no zig-zag, no
+  fixed-width helpers, no `slice`, no `pushLimit`.
+* **Tags are compile-time constants.** Single-byte tags become a direct `target[offset++] = ...` store
+  rather than a varint call, and tag sizes fold into the size arithmetic as literals.
+* **Malformed input raises `IllegalArgumentException`.** A dedicated exception type would be a shared type;
+  `java.lang` keeps the packages independent.
 
-### The self-containment trick
+### Known v1 limitations
 
-The wire codec cannot live in a jar, so it is **emitted as source**: one `ProtoWire.java` per generated tree
-(package configurable, default `<commonJavaPackage>.protogen`). It contains varint/zigzag/fixed32/fixed64 read+write,
-UTF-8 encode/decode, tag handling, and a growable output buffer. Its only imports are
-`java.nio.*`, `java.io.*`, `java.util.*`, `java.lang.invoke.VarHandle`.
+* **Unknown fields are dropped**, not preserved. A record carries only its declared components; keeping a
+  trailing raw buffer would put an artificial component into every constructor and every `equals`.
+* **An unknown enum value becomes `UNRECOGNIZED`** and is not re-encoded. `protoc` keeps the raw number.
+* **`protoSize()` is recomputed** rather than memoised, because a record has no mutable field to cache in.
+  Serializing a tree of depth *d* walks it *d* times. Phase 6 revisits this if benchmarks justify it.
 
-This is LightProto's idea with the Netty removed: `byte[]` + explicit offset, plus `ByteBuffer` overloads.
-`MethodHandles.byteArrayViewVarHandle` gives us `fixed32`/`fixed64` at `Unsafe` speed with a JDK-only import.
+## 4. Timestamp and Instant
 
-## 4. Front-end: parse `.proto` ourselves
+`google.protobuf.Timestamp` maps to `java.time.Instant` and travels as an **`int64` of epoch
+milliseconds**, not as the standard seconds+nanos submessage.
 
-Every rejected generator except Protostuff and Wire is a **protoc plugin**. Shelling out to a native binary
-contradicts "fully independent", so we own the front-end.
+This is a deliberate deviation, so the contract it creates is pinned by test rather than assumed:
 
-**Option A (chosen): hand-written lexer + recursive-descent parser.** ~1500 LOC, no ANTLR runtime in the plugin,
-full control over **comment retention** — the surveyed protos carry `@Example` / `@MinLength` annotations in leading
-comments and we want them in the generated Javadoc. protoc-based generators throw these away.
+> **A protogen `Timestamp` field is byte-identical to a protoc `optional int64` field of epoch millis.**
 
-**Option B (fallback): `protostuff-parser` or `wire-schema`.** Saves the parser work at the cost of an ANTLR/Kotlin
-dependency *in the plugin* (never in generated code, so I1 survives). Revisit only if Option A slips.
+`optional` is the part that is easy to get wrong. A `Timestamp` field has message presence, so an instant
+at the epoch is a real value that must go on the wire; a bare `int64` would treat zero as absent and drop
+it. `protogen-interop` derives its reference schema from the shared one by exactly this substitution, so
+the two sides cannot drift.
 
-Grammar scope for v0.1 — driven by what the surveyed `.proto` files actually use:
+Sub-millisecond precision is not transmitted. A peer built with `protoc` must declare the field as
+`optional int64`.
 
-| Feature | v0.1 | Notes |
+## 5. Validation from schema annotations
+
+The `@Annotation` vocabulary already used in the surveyed schemas becomes runtime checks in the record's
+compact constructor, so an invalid message cannot be constructed — by hand or by parsing.
+
+| Annotation | Applies to | Check |
 |---|---|---|
-| `syntax = "proto3"` | ✅ | |
-| `package`, `option java_package` / `java_multiple_files` / `java_outer_classname` | ✅ | all present in surveyed protos |
-| `import`, `import public` | ✅ | 12 files use it |
-| scalars (`string bool int32 int64 uint32 uint64 double float fixed* sfixed* sint* bytes`) | ✅ | |
-| `enum` incl. nested + `allow_alias` | ✅ | 14 files |
-| nested `message` | ✅ | |
-| `repeated` (packed + unpacked decode) | ✅ | 19 files |
-| `optional` (explicit presence) | ✅ | 8 files |
-| `map<K,V>` | ✅ | 3 files |
-| `oneof` | ✅ | not used by surveyed protos yet, cheap to add, high risk to retrofit |
-| `reserved` | ✅ | parse + enforce |
-| comment retention → Javadoc | ✅ | the differentiator |
-| well-known types (`Timestamp`, `Any`, …) | ❌ v0.2 | would be generated as plain messages, no JSON mapping |
-| `service` / gRPC | ❌ | out of scope |
-| `extend` / groups / proto2 | ❌ | proto2 in v0.3 if ever needed |
-| editions (2023/2026) | ❌ | watch, do not implement |
-| JSON mapping | ❌ | explicitly out of scope for v1 |
+| `@MinLength n` / `@MaxLength n` | `string` | length bounds |
+| `@Pattern regex` | `string` | compiled once into a `static final Pattern` |
+| `@Minimum n` / `@Maximum n` (aliases `@Min` / `@Max`) | numeric | inclusive bounds |
+| `@ExclusiveMinimum n` / `@ExclusiveMaximum n` | numeric | exclusive bounds |
+| `@MultipleOf n` | integral | exact multiple |
+| `@MinItems n` / `@MaxItems n` | `repeated`, `map` | size bounds |
+| `@Required` | any | present, i.e. non-default |
+| `@Example v`, `@RootNode` | any | documentation only, carried into the Javadoc |
 
-Anything outside the scope must fail with a **clear, located diagnostic** (`file:line:col: message`), never a
-silent wrong result.
+**One consequence worth knowing:** proto3 cannot distinguish absent from default on an implicit-presence
+field, so a constraint on such a field is enforced on *every* instance — it effectively becomes required.
+Put the constraint on an `optional` field when it should apply only when the value is set. Both behaviours
+are pinned in `ValidationTest`.
 
-## 5. Maven plugin surface
+## 6. Front-end
 
-Goal `protogen:generate`, default phase `generate-sources` (plus `generate-test-sources` for `generate-test`).
+Every generator surveyed in RESEARCH.md except Protostuff and Wire is a **protoc plugin**. Shelling out to
+a native binary contradicts "fully independent", so protogen owns a hand-written lexer and recursive-descent
+parser — roughly 900 lines, no ANTLR, and full control over **comment retention**, which is what lets the
+`@Example` / `@MinLength` annotations reach the generated Javadoc and the validation.
+
+Two lexer decisions matter in practice:
+
+* **A comment attaches to the next declaration even across blank lines.** protoc would call such a comment
+  "detached", but here comments carry `@Pattern` and `@Minimum` annotations that become validation, and
+  real schemas are often written double-spaced. Dropping the comment would silently drop the validation.
+* **Generated locals never collide with schema names.** A schema may declare fields called `key`, `value`,
+  `size` or `target` — a generated method using those names would fail to compile or, worse, silently
+  shadow the component. `Locals` allocates each generated name around the message's own.
+
+Supported, driven by what the surveyed schemas actually use:
+
+| Feature | | Notes |
+|---|---|---|
+| `syntax = "proto3"` | ✅ | proto2 is rejected with a diagnostic |
+| `java_package`, `java_multiple_files`, `java_outer_classname` | ✅ | including the wrapper-class layout and protoc's `OuterClass` collision suffix |
+| `import`, `import public` | ✅ | |
+| all 15 scalar types | ✅ | |
+| `enum`, nested enums, `allow_alias`, lower-case constants | ✅ | proto3's zero-value rule is enforced |
+| nested `message`, recursion, cross-file references | ✅ | proto scoping: innermost scope outward, leading dot forces absolute |
+| `repeated`, packed and unpacked decode | ✅ | |
+| `optional` explicit presence | ✅ | |
+| `map<K,V>`, including message values | ✅ | key/value always written, as protoc does |
+| `oneof` | ✅ | siblings cleared on parse, at most one enforced on construction |
+| `reserved` | ✅ | parsed |
+| `google.protobuf.Timestamp` | ✅ | see §4 |
+| comment → Javadoc, comment → validation | ✅ | the differentiator |
+| other well-known types, `service`, `extend`, groups, proto2, editions, JSON | ❌ | rejected with `file:line:col` |
+
+Anything unsupported **fails the build with a located diagnostic**, never a silently wrong result.
+
+## 7. Maven plugin surface
+
+Goal `protogen:generate`, default phase `generate-sources`.
 
 | Parameter | Default | Purpose |
 |---|---|---|
 | `protoSourceRoot` | `${basedir}/src/main/proto` | input tree |
-| `includes` / `excludes` | `**/*.proto` / – | filtering |
-| `outputDirectory` | `${project.build.directory}/generated-sources/protogen` | output, auto-added as compile source root |
+| `includes` / `excludes` | `**/*.proto` / – | filtering; a leading `**/` is optional, so a file in the root matches |
+| `outputDirectory` | `${project.build.directory}/generated-sources/protogen` | output, auto-added as a compile source root |
 | `javaPackage` | from `option java_package` | override |
-| `runtimePackage` | `<commonJavaPackage>.protogen` | where `ProtoWire.java` lands |
-| `preserveUnknownFields` | `true` | footprint vs. round-trip fidelity |
 | `emitJavadoc` | `true` | comment retention |
-| `checkStaleMillis` | `0` | incremental regeneration |
-| `failOnUnsupported` | `true` | I5 discipline |
+| `failOnUnsupported` | `true` | |
+| `skip` | `false` | |
 
-UX benchmark is `ascopes/protobuf-maven-plugin`. The Mojo must be **incremental** (skip when no `.proto` is newer
-than its output) and must not break `mvn -o` offline builds.
+## 8. Verification
 
-## 6. Verification strategy
+Two modules, deliberately separated:
 
-`protobuf-java` is our **oracle, in test scope only** — it never touches the generated code's classpath.
+**`protogen-it` — the zero-dependency proof.** No compile-scope dependencies at all. The generated code is
+compiled and exercised there: round-trips, presence rules, collections, enums, `Instant`, oneofs,
+validation, immutability, and a malformed-input suite that walks every truncation of a well-formed message
+and asserts it either parses or fails cleanly — never an index error, a stack overflow or a hang.
 
-1. **Round-trip:** `protogen.encode(msg)` → `protobuf-java.parse` → assert field-equal, and the reverse.
-2. **Byte-identity:** for canonical messages, assert `protogen` bytes equal `protoc` bytes exactly
-   (field order, packed-ness, default omission).
-3. **Differential fuzz:** random schema-conforming instances, both directions, ~10k cases in CI.
-4. **Truncated / malformed input:** must throw a defined exception, never loop or over-read.
-5. **`ImportPurityTest`:** greps every generated file — any non-`java.` import fails the build (I1).
-6. **Zero-dependency compile:** `protogen-it` compiles the generated sources with an **empty compile classpath**
-   and runs them (I3). This is the acceptance test for the entire project.
+**`protogen-interop` — the differential proof.** The *same* `.proto` files are compiled a second time by
+`protoc` into `protobuf-java` classes. The reference schemas are **derived from the shared ones at build
+time** (rewriting `java_package`, and `Timestamp` → `optional int64`), so the two sides cannot drift apart.
+Every message is then encoded by each implementation and decoded by the other, and the encodings are
+compared byte for byte — including a seeded fuzz suite over random messages. `protoc` and `protobuf-java`
+exist only in this module.
 
-Sample `.proto` files live in `protogen-it/src/main/proto`. The seeded ones are neutral fixtures that exercise the
-exact feature set of the surveyed protos (see §4 table); drop the real test files in alongside them.
+Three real codec bugs were caught this way and fixed: an unpaired surrogate sized as three bytes but
+encoded as one, `-0.0` skipped as if it were the default, and `Timestamp` presence differing from a bare
+`int64`.
 
-## 7. Phases
+## 9. Phases
 
-| Phase | Deliverable | Done when |
+| Phase | Deliverable | State |
 |---|---|---|
-| **0** | Scaffolding: parent pom, 3 modules, Mojo stub wired into `generate-sources`, sample protos, CI | `mvn verify` green; plugin runs and logs discovered `.proto` files |
-| **1** | Front-end: lexer, parser, AST, import resolution, type linking, diagnostics | parses all sample protos + a hostile-syntax corpus; errors carry `file:line:col` |
-| **2** | `ProtoWire.java` emitter + codegen for scalars, strings, bytes, enums, nested messages, presence | round-trip vs `protobuf-java` green for a flat message |
-| **3** | `repeated` (packed & unpacked), `map`, `oneof` | round-trip green for all sample protos |
-| **4** | Mojo hardening: includes/excludes, incremental, offline, multi-module, `addCompileSourceRoot` | `protogen-it` builds from a clean `~/.m2` with `-o` |
-| **5** | Verification suite (§6 items 1–6), CI matrix on JDK 17/21/25 | zero-dependency compile+run test green — **project goal met** |
-| **6** | Optimization: precomputed tag constants, `VarHandle` fixed paths, UTF-8 fast path, cached size/hash, JMH harness | benchmarked ≥ `protobuf-java` on encode/decode, materially less allocation |
-| **7** | Release: Javadoc from comments, `README` usage, semantic versioning, publish to GitHub Packages / Maven Central | a consumer project compiles with **no** protobuf dependency |
+| **0** | Scaffolding, Mojo wired into `generate-sources` | ✅ |
+| **1** | Lexer, parser, linker, located diagnostics | ✅ |
+| **2** | Codec emitter, scalars, strings, bytes, enums, presence | ✅ |
+| **3** | `repeated` packed and unpacked, `map`, `oneof`, `Instant`, validation | ✅ |
+| **4** | Mojo hardening: includes/excludes, offline, multi-module | ✅ |
+| **5** | Verification: zero-dependency compile and run, differential vs protoc, fuzz | ✅ |
+| **6** | Optimization: JMH harness, size memoisation if justified, UTF-8 fast path | open |
+| **7** | Release: incremental regeneration, semantic versioning, publish | open |
 
-Phases 0–5 are the MVP. Phase 6 is where "optimized" gets earned — deliberately *after* correctness.
+## 10. Open questions
 
-## 8. Risks
-
-| Risk | Mitigation |
-|---|---|
-| proto3 default/presence semantics are subtle — easy to be subtly wrong | differential testing against `protobuf-java` from Phase 2, not Phase 5 |
-| Hand-written parser under-covers real-world `.proto` | hostile corpus in Phase 1; `failOnUnsupported=true` so gaps are loud |
-| "Self-contained" erodes one convenience import at a time | `ImportPurityTest` in CI from Phase 0 |
-| Generated code bloat (a full codec per tree) | one shared `ProtoWire` per tree, not per message; measure with `-Xlint` + jar size assertion |
-| Scope creep into gRPC/JSON/editions | §4 table is the contract; anything else is a new milestone |
-
-## 9. Open questions
-
-1. **Mutable/reusable message mode** (QuickBuffers-style) — worth a `messageStyle=immutable|mutable` flag, or does
-   immutable-only keep the generator honest?
-2. **`ProtoWire` placement** when one build produces several unrelated Java packages — one shared public class, or
-   one package-private copy per package (bigger, but zero cross-package coupling)?
-3. **Well-known types** — is `Timestamp` needed for the surveyed protos, or is `int64 epochMillis` the house style?
-4. **Comment annotations** (`@Example`, `@MinLength`) — pass through to Javadoc only, or also emit validation code?
-   The latter overlaps with the existing `api-documentation-maven-plugin` / `api_validator` pipeline.
+1. **Unknown-field preservation** — worth an opt-in that adds a trailing component, or is dropping them the
+   right trade for record cleanliness?
+2. **`protoSize()` memoisation** — records forbid a cached field. Accept the recomputation, or generate a
+   non-record final class behind a flag for deep trees?
+3. **Validation on parse** — currently a parsed message that violates a constraint is rejected. Should
+   there be a lenient parse for reading legacy data?
+4. **`@Example` / `@RootNode`** — currently Javadoc only. Should they feed the existing AsyncAPI
+   documentation pipeline directly?

@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package protogen.it;
+
+option java_multiple_files = true;
+option java_package = "protogen.it.model";
+
+/**
+ * Every proto3 scalar type, once, plus both presence flavours.
+ *
+ * Mirrors the scalar usage found across the surveyed schemas: string / bool / int32 / int64 / bytes /
+ * double dominate, with `optional` used for genuinely absent values.
+ */
+message ScalarsV1 {
+  // @Example hello
+  string text = 1;
+
+  bool flag = 2;
+  int32 i32 = 3;
+  int64 i64 = 4;
+  uint32 u32 = 5;
+  uint64 u64 = 6;
+  sint32 s32 = 7;
+  sint64 s64 = 8;
+  fixed32 f32 = 9;
+  fixed64 f64 = 10;
+  sfixed32 sf32 = 11;
+  sfixed64 sf64 = 12;
+  float real32 = 13;
+  double real64 = 14;
+  bytes blob = 15;
+
+  // Explicit presence: unset must stay distinguishable from the empty string.
+  optional string optionalText = 20;
+  optional int32 optionalNumber = 21;
+  optional bool optionalFlag = 22;
+  optional double optionalReal = 23;
+  optional bytes optionalBlob = 24;
+
+  // Field numbers above 15 need a two byte tag; both paths must be exercised.
+  string wideTagText = 2000;
+  int32 wideTagNumber = 100000;
+}

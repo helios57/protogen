@@ -1,5 +1,8 @@
 package io.github.helios57.protogen.compiler;
 
+import io.github.helios57.protogen.compiler.gen.JavaGenerator;
+import io.github.helios57.protogen.compiler.linker.Linker;
+import io.github.helios57.protogen.compiler.linker.Schema;
 import io.github.helios57.protogen.compiler.model.ProtoFile;
 import io.github.helios57.protogen.compiler.parser.ProtoParser;
 
@@ -25,6 +28,11 @@ public final class ProtoCompiler {
         this.options = options;
     }
 
+    /** Parses, links and generates in one step. */
+    public List<JavaGenerator.GeneratedFile> compile(List<Path> protoFiles) {
+        return generate(link(parse(protoFiles)));
+    }
+
     /** Parses every input file. */
     public List<ProtoFile> parse(List<Path> protoFiles) {
         List<ProtoFile> parsed = new ArrayList<>(protoFiles.size());
@@ -38,42 +46,34 @@ public final class ProtoCompiler {
     public ProtoFile parse(Path protoFile) {
         try {
             String source = Files.readString(protoFile, StandardCharsets.UTF_8);
-            return new ProtoParser(protoFile.getFileName().toString(), source).parse();
+            return parse(protoFile.getFileName().toString(), source);
         } catch (IOException e) {
             throw new UncheckedIOException("cannot read " + protoFile, e);
         }
     }
 
-    /**
-     * Generates Java sources for the given files.
-     * <p>
-     * Phase 2/3 of PLAN.md. Until the emitters exist this returns an empty list rather than pretending to work.
-     *
-     * @return the files to be written, relative paths plus content
-     */
-    public List<GeneratedFile> generate(List<ProtoFile> files) {
-        // TODO phase 2: emit ProtoWire.java + message/enum classes. See PLAN.md section 3.
-        return List.of();
+    /** Parses proto source held in memory, for tests. */
+    public ProtoFile parse(String fileName, String source) {
+        return new ProtoParser(fileName, source).parse();
+    }
+
+    /** Resolves every type reference across the given files. */
+    public Schema link(List<ProtoFile> files) {
+        return new Linker().link(files);
+    }
+
+    /** Generates the Java sources for a linked schema. */
+    public List<JavaGenerator.GeneratedFile> generate(Schema schema) {
+        return new JavaGenerator(options.emitJavadoc()).generate(schema);
     }
 
     /** Compiler configuration. Mirrors the Mojo parameters, see PLAN.md section 5. */
     public record Options(String javaPackageOverride,
-                          String runtimePackage,
-                          boolean preserveUnknownFields,
                           boolean emitJavadoc,
                           boolean failOnUnsupported) {
 
         public static Options defaults() {
-            return new Options(null, null, true, true, true);
+            return new Options(null, true, true);
         }
-    }
-
-    /**
-     * One generated Java source file.
-     *
-     * @param relativePath path relative to the output directory, e.g. {@code com/example/Foo.java}
-     * @param content      the full source text
-     */
-    public record GeneratedFile(String relativePath, String content) {
     }
 }

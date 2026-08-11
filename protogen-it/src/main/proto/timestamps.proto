@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package protogen.it;
+
+option java_multiple_files = true;
+option java_package = "protogen.it.model";
+
+import "google/protobuf/timestamp.proto";
+
+/**
+ * Timestamp fields surface as java.time.Instant.
+ *
+ * IMPORTANT: protogen encodes them as an int64 of epoch milliseconds, NOT as the standard
+ * seconds+nanos submessage. A peer built with protoc must therefore declare the field as
+ * `optional int64` - optional because a Timestamp field has message presence, so the value must
+ * still be transmitted when it is zero. Sub-millisecond precision is not carried.
+ */
+message EventV1 {
+  // @Example event-1
+  string eventId = 1;
+
+  // When the event happened.
+  google.protobuf.Timestamp occurredAt = 2;
+
+  // Optional: unset stays distinguishable from the epoch.
+  optional google.protobuf.Timestamp acknowledgedAt = 3;
+
+  repeated google.protobuf.Timestamp retryAt = 4;
+}

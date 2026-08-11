@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package protogen.it;
+
+// java_multiple_files = false wraps every type in an outer class named after the file.
+// Several surveyed schemas rely on this, including one that declares a nested enum reached as
+// OuterApiEnum.StatusEnumV1 from another file.
+option java_multiple_files = false;
+option java_package = "protogen.it.model";
+
+message OuterApiEnumV1 {
+  enum InnerStatusV1 {
+    INNER_STATUS_V1_UNSPECIFIED = 0;
+    STARTING = 1;
+    RUNNING = 2;
+    STOPPED = 3;
+  }
+
+  InnerStatusV1 status = 1;
+}
+
+message WrappedHolderV1 {
+  OuterApiEnumV1.InnerStatusV1 status = 1;
+  OuterApiEnumV1 wrapped = 2;
+}
