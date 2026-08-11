@@ -19,6 +19,8 @@
     </description>
 
     <properties>
+        <!-- test and benchmark harnesses; not artifacts anyone should consume from Central -->
+        <maven.deploy.skip>true</maven.deploy.skip>
         <jmh.version>1.37</jmh.version>
         <!-- benchmarks measure hand-written code paths; no need to enforce coverage or run tests here -->
         <maven.test.skip>true</maven.test.skip>
@@ -65,7 +67,7 @@
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-shade-plugin</artifactId>
-                        <version>3.6.0</version>
+                        <version>3.6.2</version>
                         <executions>
                             <execution>
                                 <phase>package</phase>

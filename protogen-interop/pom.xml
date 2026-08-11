@@ -20,6 +20,8 @@
     </description>
 
     <properties>
+        <!-- test and benchmark harnesses; not artifacts anyone should consume from Central -->
+        <maven.deploy.skip>true</maven.deploy.skip>
         <!-- where the rewritten copies of the shared .proto files land -->
         <interop.proto.dir>${project.build.directory}/interop-proto</interop.proto.dir>
         <shared.proto.dir>${project.basedir}/../protogen-it/src/main/proto</shared.proto.dir>
@@ -74,7 +76,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-antrun-plugin</artifactId>
-                <version>3.1.0</version>
+                <version>3.2.0</version>
                 <executions>
                     <execution>
                         <id>derive-reference-protos</id>
