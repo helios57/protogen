@@ -21,6 +21,27 @@
         </license>
     </licenses>
 
+    <!-- developers, scm and issueManagement are all required for a valid Maven Central deployment -->
+    <developers>
+        <developer>
+            <id>helios57</id>
+            <name>helios57</name>
+            <url>https://github.com/helios57</url>
+        </developer>
+    </developers>
+
+    <scm>
+        <connection>scm:git:https://github.com/helios57/protogen.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/helios57/protogen.git</developerConnection>
+        <url>https://github.com/helios57/protogen</url>
+        <tag>HEAD</tag>
+    </scm>
+
+    <issueManagement>
+        <system>GitHub Issues</system>
+        <url>https://github.com/helios57/protogen/issues</url>
+    </issueManagement>
+
     <modules>
         <module>protogen-compiler</module>
         <module>protogen-maven-plugin</module>
@@ -35,10 +56,10 @@
 
         <maven.version>3.9.16</maven.version>
         <maven-plugin-tools.version>3.15.2</maven-plugin-tools.version>
-        <junit.version>5.11.4</junit.version>
+        <junit.version>6.1.3</junit.version>
         <assertj.version>3.27.7</assertj.version>
         <!-- test-scope oracle ONLY - must never reach a compile classpath, see PLAN.md I2/I3 -->
-        <protobuf-java.version>4.29.3</protobuf-java.version>
+        <protobuf-java.version>4.35.1</protobuf-java.version>
     </properties>
 
     <dependencyManagement>
@@ -70,18 +91,94 @@
         </dependencies>
     </dependencyManagement>
 
+    <profiles>
+        <!--
+          Everything Maven Central requires beyond a normal build: sources, javadoc, GPG signatures and the
+          upload itself. Kept in a profile so day-to-day builds neither sign nor need a key.
+
+          Activate with `mvn -Prelease deploy`; see RELEASING.md for the credentials it expects.
+        -->
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <version>3.4.0</version>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <goals>
+                                    <goal>jar-no-fork</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>3.12.0</version>
+                        <executions>
+                            <execution>
+                                <id>attach-javadocs</id>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.8</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                                <configuration>
+                                    <!-- take the passphrase from the environment rather than a tty -->
+                                    <gpgArguments>
+                                        <arg>--pinentry-mode</arg>
+                                        <arg>loopback</arg>
+                                    </gpgArguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.11.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <!-- false = upload and validate, then publish by hand from the portal.
+                                 Flip to true once a release has gone through cleanly. -->
+                            <autoPublish>false</autoPublish>
+                            <waitUntil>validated</waitUntil>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
     <build>
         <pluginManagement>
             <plugins>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-compiler-plugin</artifactId>
-                    <version>3.13.0</version>
+                    <version>3.15.0</version>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-surefire-plugin</artifactId>
-                    <version>3.5.2</version>
+                    <version>3.5.6</version>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>

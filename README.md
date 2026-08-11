@@ -166,7 +166,15 @@ mvn verify
 ```
 
 Requires JDK 17+ and Maven 3.9+. CI runs the same build on JDK 17, 21 and 25, and asserts that
-`protogen-it` still has no compile-scope dependencies.
+`protogen-it` still has no compile-scope dependencies. Dependency and action versions are kept current by
+Dependabot, grouped into one PR per fleet so an update either passes the full suite or says which bump
+broke it.
+
+## Releasing
+
+Not on Maven Central yet — the build is wired for it and waits only on the publishing credentials. See
+**[RELEASING.md](RELEASING.md)**: create a Central Portal account with the GitHub login (which verifies the
+`io.github.helios57` namespace automatically), add four repository secrets, then push a `v*` tag.
 
 ## Performance
 

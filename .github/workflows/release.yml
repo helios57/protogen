@@ -1,0 +1,96 @@
+name: release
+
+# Publishing is triggered by pushing a tag, so the released bits are always tied to a commit.
+# Everything this needs is listed in RELEASING.md; without the four secrets it fails fast and loudly.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dryRun:
+        description: 'Build and sign, but do not upload'
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the required secrets are present
+        env:
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          missing=""
+          for name in CENTRAL_USERNAME CENTRAL_PASSWORD GPG_PRIVATE_KEY GPG_PASSPHRASE; do
+            [ -z "${!name}" ] && missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing repository secret(s):$missing - see RELEASING.md"
+            exit 1
+          fi
+
+      # setup-java writes the settings.xml server entry and imports the signing key for us
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          server-id: central
+          server-username: MAVEN_USERNAME
+          server-password: MAVEN_PASSWORD
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+
+      # a tagged release must be a real version, not a snapshot, and must match the tag
+      - name: Check the version matches the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version=$(mvn -B -ntp -q help:evaluate -Dexpression=project.version -DforceStdout)
+          tag="${GITHUB_REF_NAME#v}"
+          echo "pom version: $version, tag: $tag"
+          if [ "$version" != "$tag" ]; then
+            echo "::error::pom version $version does not match tag $tag"
+            exit 1
+          fi
+          case "$version" in
+            *SNAPSHOT) echo "::error::refusing to release a SNAPSHOT"; exit 1 ;;
+          esac
+
+      - name: Build, test and verify
+        run: mvn -B -ntp verify
+
+      - name: Deploy to Maven Central
+        if: ${{ github.event_name == 'push' || !inputs.dryRun }}
+        env:
+          MAVEN_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: mvn -B -ntp -Prelease deploy -DskipTests
+
+      - name: Dry run - build and sign only
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dryRun }}
+        env:
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: mvn -B -ntp -Prelease verify -DskipTests
+
+      - name: Upload the artifacts that would be published
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: |
+            protogen-compiler/target/*.jar
+            protogen-compiler/target/*.asc
+            protogen-maven-plugin/target/*.jar
+            protogen-maven-plugin/target/*.asc
+          retention-days: 14

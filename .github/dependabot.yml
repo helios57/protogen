@@ -1,0 +1,63 @@
+version: 2
+
+updates:
+  # ---------------------------------------------------------------- Maven
+  # Every module is listed explicitly. The parent holds most versions, but the modules carry a few of
+  # their own (jar, antrun, shade), and Dependabot only reads the manifests it is pointed at.
+  - package-ecosystem: maven
+    directories:
+      - "/"
+      - "/protogen-compiler"
+      - "/protogen-maven-plugin"
+      - "/protogen-it"
+      - "/protogen-interop"
+      - "/protogen-benchmark"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Zurich
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    commit-message:
+      prefix: "build"
+      include: scope
+    groups:
+      # One PR for the whole Maven plugin fleet rather than six, since they move together and the
+      # build either passes with all of them or tells us which one broke it.
+      maven-plugins:
+        patterns:
+          - "org.apache.maven.plugins:*"
+          - "org.apache.maven.plugin-tools:*"
+          - "org.sonatype.central:*"
+          - "org.xolstice.maven.plugins:*"
+          - "kr.motd.maven:*"
+      # Test-scope tooling, likewise. protobuf-java lives here on purpose: it is the differential-test
+      # oracle, so a bump to it is a *strengthening* of the test suite, never a runtime change.
+      test-tooling:
+        patterns:
+          - "org.junit:*"
+          - "org.junit.jupiter:*"
+          - "org.assertj:*"
+          - "com.google.protobuf:*"
+          - "org.openjdk.jmh:*"
+
+  # ------------------------------------------------------- GitHub Actions
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Zurich
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        patterns:
+          - "*"

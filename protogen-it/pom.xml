@@ -17,6 +17,11 @@
         compile classpath, and verified against protobuf-java (test scope only, never compile scope).
     </description>
 
+    <properties>
+        <!-- test and benchmark harnesses; not artifacts anyone should consume from Central -->
+        <maven.deploy.skip>true</maven.deploy.skip>
+    </properties>
+
     <dependencies>
         <!--
           There is deliberately NO compile-scope dependency here. That is the whole point of protogen:
@@ -77,7 +82,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
-                <version>3.4.2</version>
+                <version>3.5.1</version>
                 <executions>
                     <execution>
                         <goals>

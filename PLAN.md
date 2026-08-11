@@ -261,7 +261,7 @@ encoded as one, `-0.0` skipped as if it were the default, and `Timestamp` presen
 | **4** | Mojo hardening: includes/excludes, offline, multi-module | ✅ |
 | **5** | Verification: zero-dependency compile and run, differential vs protoc, fuzz | ✅ |
 | **6** | Optimization: JMH harness against protobuf-java, CI | ✅ harness and numbers; size memoisation still to do |
-| **7** | Release: incremental regeneration, semantic versioning, publish | open |
+| **7** | Release: Maven Central publishing, signing, CI release workflow, Dependabot | ✅ wired; awaiting the account credentials in [RELEASING.md](RELEASING.md) |
 
 Measured results and how to read them: [BENCHMARKS.md](BENCHMARKS.md).
 
