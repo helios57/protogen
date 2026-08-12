@@ -101,9 +101,9 @@ public record NodeV1(
         String name,                       // implicit presence -> "" default, never null
         StageEnumV1 stage,                 // enum default is the constant numbered 0
         String stageSuffix,                // `optional` -> nullable
-        List<NodeV1> children,             // unmodifiable, never null
+        List<NodeV1> children,             // immutable, never null
         List<Integer> ports,
-        Map<String, String> endpoints,     // unmodifiable, insertion ordered
+        Map<String, String> endpoints,     // immutable, insertion ordered
         CoordinatesV1 location,            // message presence -> nullable
         Instant createdAt) {               // google.protobuf.Timestamp -> Instant
 
