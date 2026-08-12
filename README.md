@@ -26,6 +26,10 @@ and why.
 Drop `.proto` files in `src/main/proto` and build. That is the whole setup — **no dependency is added to
 your project**, which is the entire point.
 
+It also reads **[AsyncAPI](#asyncapi-as-input)**, 2.x or 3.x: the models a document's payloads point at are
+generated from the document itself, and the channel addresses, function stubs and Spring Cloud Stream
+configuration it implies are scaffolded next to them, to read and adapt rather than to compile.
+
 ---
 
 ## Contents
@@ -34,6 +38,7 @@ your project**, which is the entire point.
 - [Configuration](#configuration) · [Examples](#examples)
 - [Validation](#validation-from-the-schema) · [Unknown fields](#unknown-fields) ·
   [Timestamps](#timestamps) · [Documentation metadata](#documentation-metadata)
+- [AsyncAPI as input](#asyncapi-as-input)
 - [Supported schema features](#supported-schema-features) · [Compatibility and deviations](#compatibility-and-deviations) · [Performance](#performance)
 
 ## Why
@@ -142,6 +147,18 @@ All parameters, with their defaults. Each also has a `-D` property, shown in the
 | `failOnUnsupported` | `true` | fail the build on unsupported constructs rather than skipping them | `protogen.failOnUnsupported` |
 | `skip` | `false` | skip the execution entirely | `protogen.skip` |
 
+And the [AsyncAPI](#asyncapi-as-input) parameters, all inert until `asyncApiSourceRoot` is set:
+
+| Parameter | Default | What it does | Property |
+|---|---|---|---|
+| `asyncApiSourceRoot` | *(unset — feature off)* | directory scanned for AsyncAPI documents, 2.x or 3.x, YAML or JSON | `protogen.asyncApiSourceRoot` |
+| `scaffoldOutputDirectory` | `${project.build.directory}/protogen-scaffold` | where the scaffolding lands. **Never compiled and never a source root** — point it at `src/main/java` only if you want it in your sources, and know it overwrites | `protogen.scaffoldOutputDirectory` |
+| `scaffoldPackage` | the package of the generated messages | package for the scaffolded Java | `protogen.scaffoldPackage` |
+| `scaffoldChannels` | `true` | a typed address record per channel | `protogen.scaffoldChannels` |
+| `scaffoldStubs` | `true` | a `java.util.function` stub per operation | `protogen.scaffoldStubs` |
+| `scaffoldBinderConfig` | `true` | Spring Cloud Stream bindings for the Solace binder | `protogen.scaffoldBinderConfig` |
+| `scaffoldNotes` | `true` | a README explaining what each scaffolded file is | `protogen.scaffoldNotes` |
+
 There is one **runtime** switch, read by the generated code rather than the plugin:
 
 | Property | Default | Effect |
@@ -227,6 +244,22 @@ A schema cannot be generated two ways into the same package, so give each its ow
     </configuration>
 </execution>
 ```
+
+### Spec-first: models from the AsyncAPI document, scaffolding into the source tree
+
+```xml
+<configuration>
+    <!-- no proto source root: every model comes from a payload ref -->
+    <asyncApiSourceRoot>${project.build.directory}/filtered/asyncapi</asyncApiSourceRoot>
+    <scaffoldOutputDirectory>${project.basedir}/src/main/java</scaffoldOutputDirectory>
+    <scaffoldPackage>com.example.messaging</scaffoldPackage>
+    <scaffoldStubs>false</scaffoldStubs>
+    <scaffoldBinderConfig>false</scaffoldBinderConfig>
+</configuration>
+```
+
+Keeps the channel address records, which are worth having under version control, and drops the stubs and
+the binder configuration, which are a starting point rather than something to keep regenerating.
 
 ### Reading legacy data that predates a constraint
 
@@ -348,6 +381,122 @@ read without re-parsing the schema or reflecting over the classes:
 
 Disable with `<emitSchemaMetadata>false</emitSchemaMetadata>`.
 
+## AsyncAPI as input
+
+Point `asyncApiSourceRoot` at a directory of AsyncAPI documents — **2.x or 3.x, YAML or JSON** — and
+protogen reads them too. Two different things come out, and the difference matters:
+
+| | What | Where it goes |
+|---|---|---|
+| **Models** | the `.proto` a payload names, and everything it imports | the normal output, compiled into your artifact |
+| **Scaffolding** | channel records, function stubs, binder configuration | a throwaway directory, **never compiled** |
+
+```xml
+<configuration>
+    <asyncApiSourceRoot>${project.basedir}/src/main/asyncapi</asyncApiSourceRoot>
+</configuration>
+```
+
+> Specs are often filtered for `@project.version@` and friends. If yours are, point this at the **filtered**
+> output rather than the source tree.
+
+### The models
+
+A document that names a schema is the contract for it:
+
+```yaml
+components:
+  messages:
+    OrderCreated:
+      contentType: application/protobuf
+      schemaFormat: 'application/vnd.google.protobuf;version=3'
+      payload:
+        schema:
+          $ref: schemas/orderEventV1.proto
+```
+
+That `.proto` is generated exactly as if it had been under `protoSourceRoot`, and whatever it imports comes
+along. A **spec-first project needs no proto source root at all** — leave it unset (or pointing at nothing)
+and every model comes from the documents. The ref is resolved next to the document first, then against
+`protoSourceRoot`, then by file name under either; a ref that matches nothing is a warning naming the
+channel, never a silently missing model. Payloads that are not protobuf are left alone.
+
+### The scaffolding
+
+Everything below is **help, not build output**. It is written to `target/protogen-scaffold`, is never added
+as a source root, and nothing in a normal build compiles it — a generator cannot know how your application
+is wired, and code it guessed at has no business in a live source tree. Read it, take what is useful,
+delete the rest. Each of the four kinds has its own switch, and `scaffoldOutputDirectory` will put it
+wherever you want, including straight into `src/main/java`.
+
+**A record per channel**, whose components are the address parameters in address order, validated against
+what the document actually says about them:
+
+```java
+new IncrementalChannel("acme", "prod").address();
+// example/metric/incremental/acme/prod
+
+new IncrementalChannel("acme", "staging");
+// IllegalArgumentException: stage must be one of [dev, int, prod], was: staging
+```
+
+**A `java.util.function` stub per operation** — `Supplier<byte[]>` to send, `Consumer<byte[]>` to receive:
+
+```java
+public class ReadControlListener implements Consumer<byte[]> {
+    @Override
+    public void accept(byte[] message) {
+        // the content type says gzip, so decompress 'message' first
+        // KpiCollectionV1 payload = KpiCollectionV1.parseFrom(message);
+        throw new UnsupportedOperationException("scaffold: handle the message");
+    }
+}
+```
+
+The stubs bind **`byte[]`, not the generated records**, because a `byte[]` is what actually crosses the
+binder. Turning a payload into those bytes — and compressing it when the content type says gzip — is
+application logic, and where that belongs is a decision the generator deliberately does not make. It points
+at the step and leaves it to you.
+
+**The Spring Cloud Stream configuration** for the Solace binder, with the destinations taken from the
+channel addresses — the part that is tedious and easy to get wrong by hand:
+
+```yaml
+spring:
+  cloud:
+    function:
+      definition: |
+        publishIncremental;
+        readControl
+    stream:
+      default:
+        binder: solace
+      bindings:
+        publishIncremental-out-0:
+          destination: example/metric/incremental/{tenant}/{stage}
+          contentType: "application/gzip-protobuf"
+        readControl-in-0:
+          destination: example/metric/control
+      solace:
+        bindings:
+          readControl-in-0:
+            consumer:
+              queueNameExpression: "destination.trim().replaceAll('[*>]', '_')"
+```
+
+`send` becomes an `-out-0` binding and `receive` an `-in-0` one; only consumers get a queue. Connection
+details, credentials and tuning are absent on purpose — they belong to the environment, not to an API
+description. A destination containing `{parameters}` has to be resolved before use, which is exactly what
+the channel records do.
+
+### What is read from which version
+
+2.x keys channels by their address and hangs `publish`/`subscribe` off them; 3.0 gives a channel an id plus
+an `address` and moves the direction into a separate `operations` section. Both are read into one model, so
+everything downstream behaves the same. For a 2.x document the channel id is derived from the literal
+segments of its address. `$ref`s into `components` are resolved; parameter constraints are read from the
+parameter itself (3.0) or from its nested `schema` (2.x).
+
 ## Supported schema features
 
 | Feature | | Notes |
@@ -362,7 +511,7 @@ Disable with `<emitSchemaMetadata>false</emitSchemaMetadata>`.
 | `oneof` | ✅ | siblings cleared on parse, at most one enforced on construction |
 | `optional` explicit presence | ✅ | |
 | `reserved` | ✅ | numbers, ranges, `to max` and names — **enforced** |
-| `import`, `import public` | ✅ | |
+| `import`, `import public` | ✅ | **enforced**: a file may only name types from itself, its imports, and what those re-export with `import public` |
 | `java_package`, `java_multiple_files`, `java_outer_classname` | ✅ | both file layouts, incl. protoc's `OuterClass` collision suffix |
 | `google.protobuf.Timestamp` | ✅ | as `Instant`, see above |
 | comment → Javadoc, comment → validation | ✅ | |
@@ -379,10 +528,16 @@ Measured against `protobuf-java` on identical schemas — full numbers and cavea
 
 | | protogen vs protobuf-java |
 |---|---|
-| Build a flat message and encode it | **2.4× faster** |
-| Decode | **1.1–1.2× faster**, at every nesting depth |
-| Encode the *same instance* repeatedly, nested 5 deep | **2.1× slower** — protobuf-java memoises its size, a record has nowhere to cache |
+| Build a message and encode it | **1.9–2.1× faster**, flat or nested |
+| Decode | **1.3–1.5× faster** on trees and flat messages, and allocates less |
+| Encode the *same instance* repeatedly, nested 5 deep | **1.34× faster** |
+| `protoSize()` on its own, nothing else | **70× slower** — protobuf-java returns a memoised field, protogen computes |
 | Schemas with `@Pattern` | slower by the cost of the regex, which buys a guarantee protobuf-java does not offer |
+
+A length-delimited field has to know its payload size before writing it, and an immutable record has
+nowhere to cache one. Rather than give up records, the sizing pass records each nested size in the order
+the write reads it back, so nothing is measured twice — which is what turned encoding a deep tree from
+2.1× slower into 1.34× faster.
 
 ```bash
 mvn -Pbenchmark package -DskipTests
@@ -411,11 +566,14 @@ Every deviation is listed here with the reason.
   This is fine for schemas you control and **not** fine for untrusted input — if you parse bytes from
   outside your trust boundary, don't use protogen for it. Removing the recursion means a two-phase
   span-scan-then-build parser, which is a redesign rather than a patch.
-- **`protoSize()` is recomputed, not memoised** — a record has nowhere to cache. Free when a message is
-  serialized once, up to 2.1× when the same deep instance is serialized repeatedly. See
+- **`protoSize()` on its own is recomputed, not memoised** — a record has nowhere to cache. Encoding is
+  unaffected: `toByteArray()` measures each nested payload once and the write reads those sizes back. It
+  costs only if you call `protoSize()` repeatedly on an instance you never serialize. See
   [BENCHMARKS.md](BENCHMARKS.md).
-- **Imports are not enforced.** The linker builds one symbol table over every file it is given, so a file
-  can reference a type from a file it never imported. `protoc` rejects that.
+- **An import is matched by file name when the path does not match.** Imports are written relative to the
+  proto root while protogen knows each file by the name it was read under, so `model/common.proto` matches
+  a file read as `common.proto`. Two files with the same base name in different directories are therefore
+  indistinguishable to the import check.
 
 ### Not supported, by design
 
@@ -427,6 +585,7 @@ Every deviation is listed here with the reason.
 | **JSON mapping** | needs a JSON library or a hand-rolled one in *generated* code; out of scope for a wire-format generator |
 | **Well-known types other than `Timestamp`** | `Any` and `Struct` need dynamic typing; `Duration`, `FieldMask` and friends would be easy but nobody has needed them |
 | **Editions (2023/2024)** | watching, not implementing |
+| **Non-protobuf AsyncAPI payloads** (JSON Schema, Avro) | a document's protobuf payloads are generated, the rest are read and left alone — protogen is a protobuf generator that happens to read AsyncAPI, not the other way round |
 
 Anything in this table is **rejected with a `file:line:col` diagnostic**, never silently mis-generated.
 
@@ -434,7 +593,7 @@ Anything in this table is **rejected with a `file:line:col` diagnostic**, never 
 
 | Module | Purpose |
 |---|---|
-| `protogen-compiler` | `.proto` → Java source text. Build-tool agnostic, zero dependencies. |
+| `protogen-compiler` | `.proto` and AsyncAPI → Java source text. Build-tool agnostic. Its one dependency is a YAML parser, used at generation time only — nothing reaches the generated code, which stays JDK-only. |
 | `protogen-maven-plugin` | The `protogen:generate` Mojo. |
 | `protogen-it` | The zero-dependency proof: no compile-scope dependencies, generated code compiled and exercised. |
 | `protogen-interop` | The differential proof: the same schemas compiled by `protoc`, encodings compared byte for byte. |
