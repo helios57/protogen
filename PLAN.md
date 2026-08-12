@@ -101,22 +101,42 @@ public record NodeV1(
   measured and rejected: it would make every parse 20-40% slower to speed up a case that is already
   fast, see [BENCHMARKS.md](BENCHMARKS.md#why-the-size-is-not-cached-in-the-record).
 
-## 4. Timestamp and Instant
+## 4. The well-known types
 
-`google.protobuf.Timestamp` maps to `java.time.Instant` and travels as an **`int64` of epoch
-milliseconds**, not as the standard seconds+nanos submessage.
+They need **no import**. Their definitions are fixed and public, so being handed the file adds nothing -
+and a `protoc` include path is not something this build has. An import is still accepted, because the same
+schema usually has to compile with `protoc` too.
 
-This is a deliberate deviation, so the contract it creates is pinned by test rather than assumed:
+Every one of them is encoded exactly as `protoc` encodes it. Two ways of getting there:
 
-> **A protogen `Timestamp` field is byte-identical to a protoc `optional int64` field of epoch millis.**
+**Mapped onto the JDK** (`WellKnown`) - a length-delimited submessage on the wire, something better in
+Java:
 
-`optional` is the part that is easy to get wrong. A `Timestamp` field has message presence, so an instant
-at the epoch is a real value that must go on the wire; a bare `int64` would treat zero as absent and drop
-it. `protogen-interop` derives its reference schema from the shared one by exactly this substitution, so
-the two sides cannot drift.
+| Type | Java | Wire |
+|---|---|---|
+| `Timestamp` | `java.time.Instant` | `{int64 seconds = 1; int32 nanos = 2;}` |
+| `Duration` | `java.time.Duration` | the same shape |
+| the nine wrappers | the nullable value each carries | `{<value> value = 1;}` |
 
-Sub-millisecond precision is not transmitted. A peer built with `protoc` must declare the field as
-`optional int64`.
+A wrapper exists so that a scalar can be absent, so the Java surface is the value and `null` is absence.
+Absent writes no field; a wrapper carrying the scalar's own default writes a present but empty submessage,
+which is exactly what `protoc` does and what makes the distinction survive a round trip.
+
+`Duration` needs one conversion: protobuf gives seconds and nanos the same sign, `java.time` floors the
+seconds and keeps the nanos positive, so -0.5s is `0s -500000000ns` to one and `-1s +500000000ns` to the
+other.
+
+**Generated as records** (`WellKnownTypes`) - `Any`, `Empty`, `FieldMask`, `Struct`, `Value`, `ListValue`,
+`NullValue`, and the descriptor-shaped `Api` / `Type` / `Field` / `Option` family. They have no JDK
+counterpart, so they stay messages. Their definitions are bundled with the compiler as resources and
+pulled in on demand, transitively.
+
+They are generated into **the schema's own java package**, like the `ProtoWire` codec - not into
+`com.google.protobuf`, which would collide head-on with `protobuf-java` for anyone who has both on the
+classpath. A type the schema declares itself always wins over the bundled definition.
+
+`Any` is carried, not unpacked: resolving a `typeUrl` to a type needs a registry, which is the shared
+runtime protogen exists to remove.
 
 ## 5. Validation from schema annotations
 

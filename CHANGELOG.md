@@ -2,6 +2,47 @@
 
 Notable changes per release. Dates are release dates; versions follow [semver](https://semver.org/).
 
+## 0.3.0 — 2026-08-12
+
+The well-known types, on protoc's exact bytes and without an import.
+
+### ⚠️ Breaking: `google.protobuf.Timestamp` changed on the wire
+
+It travelled as an `int64` of epoch milliseconds. It now travels as
+`{int64 seconds = 1; int32 nanos = 2;}` — byte for byte what `protoc` writes.
+
+* **A 0.2.0 peer and a 0.3.0 peer do not understand each other's timestamps.** Upgrade both ends together,
+  or keep the old encoding by declaring the field `optional int64` and mapping it yourself.
+* A `protoc` peer no longer has to declare `optional int64` to interoperate: it declares
+  `google.protobuf.Timestamp`, which is what the schema said all along.
+* **Nanosecond precision now survives.** The old encoding truncated to milliseconds.
+* The Java surface is unchanged: still `java.time.Instant`.
+
+### Added
+
+- **Every well-known type, with no `import` needed.** Their definitions are fixed and public, so protogen
+  knows them; an `import` is still accepted because the same schema usually has to compile with `protoc`.
+  - `Duration` → `java.time.Duration`, including the sign convention (protobuf gives both parts the same
+    sign, `java.time` floors the seconds and keeps the nanos positive).
+  - The nine wrappers → the nullable value each exists to carry: `StringValue` is a `String` that may be
+    `null`, `Int32Value` an `Integer`, and so on. Absent and default stay distinguishable, which is the
+    entire point of a wrapper.
+  - `Any`, `Empty`, `FieldMask`, `Struct`, `Value`, `ListValue`, `NullValue`, and the descriptor-shaped
+    `Api` / `Type` / `Field` / `Option` family → generated as ordinary records from definitions bundled
+    with the compiler. They land in **your** schema's Java package, never `com.google.protobuf`, which
+    would collide with `protobuf-java` for anyone who has both on the classpath.
+  - Naming one pulls in what it needs and nothing else; a type you declare yourself always wins.
+
+### Changed
+
+- `protogen-interop` no longer rewrites the shared schemas before handing them to `protoc` — both sides
+  now compile the same text, including the well-known types.
+
+### Notes
+
+- Still no runtime dependency. The bundled definitions are compiler resources; what reaches your artifact
+  is generated source like everything else.
+
 ## 0.2.0 — 2026-08-12
 
 The first release to read something other than `.proto`, and the one where the generated code got

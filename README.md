@@ -26,6 +26,9 @@ and why.
 Drop `.proto` files in `src/main/proto` and build. That is the whole setup — **no dependency is added to
 your project**, which is the entire point.
 
+The **[well-known types](#well-known-types)** work without an `import` and on `protoc`'s exact bytes:
+`Timestamp` is an `Instant`, `Duration` a `Duration`, a `StringValue` a nullable `String`.
+
 It also reads **[AsyncAPI](#asyncapi-as-input)**, 2.x or 3.x: the models a document's payloads point at are
 generated from the document itself, and the channel addresses, function stubs and Spring Cloud Stream
 configuration it implies are scaffolded next to them, to read and adapt rather than to compile.
@@ -37,7 +40,7 @@ configuration it implies are scaffolded next to them, to read and adapt rather t
 - [Why](#why) · [Quick start](#quick-start) · [The generated API](#the-generated-api)
 - [Configuration](#configuration) · [Examples](#examples)
 - [Validation](#validation-from-the-schema) · [Unknown fields](#unknown-fields) ·
-  [Timestamps](#timestamps) · [Documentation metadata](#documentation-metadata)
+  [Well-known types](#well-known-types) · [Documentation metadata](#documentation-metadata)
 - [AsyncAPI as input](#asyncapi-as-input)
 - [Supported schema features](#supported-schema-features) · [Compatibility and deviations](#compatibility-and-deviations) · [Performance](#performance)
 
@@ -105,7 +108,7 @@ public record NodeV1(
         List<Integer> ports,
         Map<String, String> endpoints,     // immutable, insertion ordered
         CoordinatesV1 location,            // message presence -> nullable
-        Instant createdAt) {               // google.protobuf.Timestamp -> Instant
+        Instant createdAt) {               // google.protobuf.Timestamp -> Instant, no import needed
 
     // parsing
     public static NodeV1 parseFrom(byte[] data);
@@ -390,15 +393,59 @@ Each record then gains a trailing `byte[] unknownFields`. Unrecognised tags are 
 re-emitted after the known fields, and included in `equals`/`hashCode` — so a message written against a
 newer schema survives a round trip byte for byte instead of being silently truncated.
 
-## Timestamps
+## Well-known types
 
-`google.protobuf.Timestamp` surfaces as `java.time.Instant` and travels as an **`int64` of epoch
-milliseconds** — not the standard seconds+nanos submessage.
+The `google.protobuf` types work, and **need no `import`**: their definitions are fixed and public, so
+being handed the file adds nothing — and there is no `protoc` include path here to point at one with. An
+`import` is still accepted, because the same schema usually has to compile with `protoc` too.
 
-A peer built with `protoc` must therefore declare the field as **`optional int64`**. The `optional` matters:
-a `Timestamp` field has message presence, so an instant at the epoch is a real value that must go on the
-wire, where a bare `int64` would treat zero as absent and drop it. That equivalence is asserted byte for
-byte in `protogen-interop`, not assumed. Sub-millisecond precision is not transmitted.
+Every one of them is encoded **exactly as `protoc` encodes it**, asserted byte for byte against
+`protobuf-java` in `protogen-interop`. Only the Java surface differs, and only where the JDK already has
+the type:
+
+| Schema type | Java | Notes |
+|---|---|---|
+| `Timestamp` | `java.time.Instant` | `{int64 seconds = 1; int32 nanos = 2;}`, nanosecond precision |
+| `Duration` | `java.time.Duration` | same shape; protobuf signs both parts, `java.time` floors the seconds — converted for you |
+| `StringValue` | `String` (nullable) | the wrapper exists to make a scalar absent-able, so that is what it becomes |
+| `Int32Value`, `UInt32Value` | `Integer` | |
+| `Int64Value`, `UInt64Value` | `Long` | |
+| `BoolValue` | `Boolean` | |
+| `DoubleValue` / `FloatValue` | `Double` / `Float` | |
+| `BytesValue` | `byte[]` | copied in and out, like any `bytes` |
+| `Any`, `Empty`, `FieldMask` | generated records | no JDK counterpart, so they stay messages |
+| `Struct`, `Value`, `ListValue`, `NullValue` | generated records | `Value` is a `oneof`, so it gets a `kindCase()` |
+| `Api`, `Method`, `Mixin`, `Type`, `Field`, `Enum`, `EnumValue`, `Option`, `Syntax`, `SourceContext` | generated records | these describe protobuf itself; rarely named, but they compile |
+
+```proto
+message EventV1 {
+  google.protobuf.Timestamp occurredAt = 1;   // no import needed
+  google.protobuf.Duration took = 2;
+  google.protobuf.StringValue note = 3;
+}
+```
+
+```java
+EventV1 event = new EventV1(Instant.now(), Duration.ofMillis(250), null);
+
+event.note();          // null - absent, which is what the wrapper is for
+new EventV1(Instant.EPOCH, null, "").note();   // "" - present, and different
+```
+
+**Absent versus default is the whole point of a wrapper**, and it survives the round trip: an absent one
+writes no field at all, one carrying `""` writes a present but empty submessage.
+
+The generated records land in **your** schema's Java package, not `com.google.protobuf` — which would
+collide head-on with `protobuf-java` for anyone who has it on the classpath. Naming one pulls in what it
+needs and nothing else: `Struct` brings `Value`, `ListValue` and `NullValue`; a schema that names none of
+them generates none of them. A type you declare yourself always wins over the bundled definition.
+
+`Any` is carried, not unpacked — it is a `typeUrl` and a `byte[]`, and parsing that `byte[]` with the
+generated type it names is a line of your code, not a registry protogen would have to ship.
+
+> **The wrapper mapping is an API difference, not a wire one.** `protoc` generates a `StringValue` class
+> with a `getValue()`; protogen gives you the `String` and lets `null` mean absent. The bytes are the same
+> either way, which is the part that has to be.
 
 ## Documentation metadata
 
@@ -558,7 +605,7 @@ parameter itself (3.0) or from its nested `schema` (2.x).
 | `reserved` | ✅ | numbers, ranges, `to max` and names — **enforced** |
 | `import`, `import public` | ✅ | **enforced**: a file may only name types from itself, its imports, and what those re-export with `import public` |
 | `java_package`, `java_multiple_files`, `java_outer_classname` | ✅ | both file layouts, incl. protoc's `OuterClass` collision suffix |
-| `google.protobuf.Timestamp` | ✅ | as `Instant`, see above |
+| **well-known types** | ✅ | all of them, with **no import needed** — see [Well-known types](#well-known-types) |
 | comment → Javadoc, comment → validation | ✅ | |
 | **proto2**: `required` / `optional` / `repeated`, `[default = ...]`, no zero-enum rule, `extensions` ranges | ✅ | a declared default is exposed as `<field>OrDefault()`, so presence is not lost |
 | field options: `packed`, `default`, `deprecated`, `json_name`, custom `(...)` | ✅ | parsed and kept; `packed` and `default` are acted on |
@@ -600,7 +647,6 @@ Every deviation is listed here with the reason.
 
 | Deviation | Why | Consequence |
 |---|---|---|
-| **`google.protobuf.Timestamp` travels as an `int64` of epoch millis**, not a seconds+nanos submessage | the submessage costs a nested length-delimited frame per timestamp for precision nobody in practice uses | a protoc peer must declare the field `optional int64`. Sub-millisecond precision is lost. Asserted byte-for-byte in `protogen-interop` |
 | **Map entry order is insertion order** | `LinkedHashMap`, so output is deterministic | protoc's order is unspecified, so bytes may differ for multi-entry maps. Both sides parse either |
 | **Unknown enum values become `UNRECOGNIZED`** and are dropped on re-encode | keeping the raw number needs a second component per enum field | protoc round-trips them. Do not use protogen for a relay that must preserve enum values it does not know |
 | **Unknown fields are dropped** unless `preserveUnknownFields` is on | the extra component shows up in every constructor, `equals` and `toString` | turn the flag on for relays |
@@ -631,7 +677,7 @@ Every deviation is listed here with the reason.
 | **Groups** | the deprecated proto2 nested encoding. Rejected with a hint to use a nested message |
 | **Services / gRPC** | protogen generates models, not transports |
 | **JSON mapping** | needs a JSON library or a hand-rolled one in *generated* code; out of scope for a wire-format generator |
-| **Well-known types other than `Timestamp`** | `Any` and `Struct` need dynamic typing; `Duration`, `FieldMask` and friends would be easy but nobody has needed them |
+| **Unpacking `Any`** | it carries a `typeUrl` and a `byte[]`, both of which you get; resolving the URL to a type needs a registry, which is the shared runtime protogen exists to remove. Parse the bytes with the generated type yourself |
 | **Editions (2023/2024)** | watching, not implementing |
 | **Non-protobuf AsyncAPI payloads** (JSON Schema, Avro) | a document's protobuf payloads are generated, the rest are read and left alone — protogen is a protobuf generator that happens to read AsyncAPI, not the other way round |
 
