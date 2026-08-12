@@ -41,6 +41,8 @@ final class CodecEmitter {
         emitZigZag(out);
         emitReader(out);
         emitUnknownBuffer(out);
+        emitMapView(out);
+        emitSizePlan(out);
 
         out.outdent();
         out.line("}");
@@ -577,6 +579,193 @@ final class CodecEmitter {
         out.line("if (n + extra > b.length) {");
         out.line("    b = Arrays.copyOf(b, Math.max(b.length * 2, n + extra));");
         out.line("}");
+        out.outdent();
+        out.line("}");
+        out.outdent();
+        out.line("}");
+    }
+
+    /**
+     * The immutable map a record's map component holds, plus the two ways of getting one.
+     * <p>
+     * A map handed in from outside has to be copied - the caller still holds it and could change it
+     * afterwards. One that {@code parse} just built cannot be reached by anyone, so {@link Feature#MAP_VIEW}
+     * lets it be handed over instead, which is one map and one full rehash saved per map field parsed.
+     */
+    private void emitMapView(Java out) {
+        if (!features.contains(Feature.MAP_VIEW)) {
+            return;
+        }
+        out.blank();
+        out.javadoc("""
+                Normalises a map component: absent becomes empty, and anything a caller still holds is copied.
+
+                @param m the map as passed in
+                @return an immutable map with the same entries, in the same order""");
+        out.line("static <K, V> java.util.Map<K, V> map(java.util.Map<K, V> m) {");
+        out.indent();
+        out.line("if (m == null) {");
+        out.line("    return java.util.Map.of();");
+        out.line("}");
+        out.line("if (m instanceof M) {");
+        out.line("    return m;");
+        out.line("}");
+        out.line("return new M<>(new java.util.LinkedHashMap<>(m));");
+        out.outdent();
+        out.line("}");
+
+        out.blank();
+        out.javadoc("""
+                Wraps a map nobody else can reach, without copying it.
+
+                @param m a map just built by parsing, or {@code null}
+                @return the immutable view, or {@code null}""");
+        out.line("static <K, V> java.util.Map<K, V> own(java.util.Map<K, V> m) {");
+        out.indent();
+        out.line("return m == null ? null : new M<>(m);");
+        out.outdent();
+        out.line("}");
+
+        out.blank();
+        out.javadoc("""
+                An unmodifiable map that owns its entries rather than viewing someone else's.
+
+                <p>{@code Collections.unmodifiableMap} is a view: whoever passed the backing map in can still
+                change it. This holds the only reference, which is what makes handing a parsed map over safe.""");
+        out.line("private static final class M<K, V> extends java.util.AbstractMap<K, V> {");
+        out.indent();
+        out.blank();
+        out.line("private final java.util.Map<K, V> m;");
+        out.blank();
+        out.line("M(java.util.Map<K, V> m) {");
+        out.line("    this.m = m;");
+        out.line("}");
+        out.blank();
+        out.line("@Override");
+        out.line("public java.util.Set<Entry<K, V>> entrySet() {");
+        out.line("    return java.util.Collections.unmodifiableSet(m.entrySet());");
+        out.line("}");
+        out.blank();
+        out.line("@Override");
+        out.line("public java.util.Set<K> keySet() {");
+        out.line("    return java.util.Collections.unmodifiableSet(m.keySet());");
+        out.line("}");
+        out.blank();
+        out.line("@Override");
+        out.line("public java.util.Collection<V> values() {");
+        out.line("    return java.util.Collections.unmodifiableCollection(m.values());");
+        out.line("}");
+        out.blank();
+        out.line("// AbstractMap would walk the entries for each of these");
+        out.line("@Override");
+        out.line("public int size() {");
+        out.line("    return m.size();");
+        out.line("}");
+        out.blank();
+        out.line("@Override");
+        out.line("public boolean isEmpty() {");
+        out.line("    return m.isEmpty();");
+        out.line("}");
+        out.blank();
+        out.line("@Override");
+        out.line("public V get(Object key) {");
+        out.line("    return m.get(key);");
+        out.line("}");
+        out.blank();
+        out.line("@Override");
+        out.line("public V getOrDefault(Object key, V fallback) {");
+        out.line("    return m.getOrDefault(key, fallback);");
+        out.line("}");
+        out.blank();
+        out.line("@Override");
+        out.line("public boolean containsKey(Object key) {");
+        out.line("    return m.containsKey(key);");
+        out.line("}");
+        out.blank();
+        out.line("@Override");
+        out.line("public boolean containsValue(Object value) {");
+        out.line("    return m.containsValue(value);");
+        out.line("}");
+        out.blank();
+        out.line("@Override");
+        out.line("public void forEach(java.util.function.BiConsumer<? super K, ? super V> action) {");
+        out.line("    m.forEach(action);");
+        out.line("}");
+        out.blank();
+        out.line("@Override");
+        out.line("public int hashCode() {");
+        out.line("    return m.hashCode();");
+        out.line("}");
+        out.blank();
+        out.line("@Override");
+        out.line("public boolean equals(Object o) {");
+        out.line("    return m.equals(o);");
+        out.line("}");
+        out.blank();
+        out.line("@Override");
+        out.line("public String toString() {");
+        out.line("    return m.toString();");
+        out.line("}");
+        out.outdent();
+        out.line("}");
+    }
+
+    /**
+     * The nested sizes an encode works out on the way down and needs again on the way up.
+     * <p>
+     * Every length-delimited field has to know how long its payload is before it can write it, and a
+     * message with no room to cache would otherwise work each subtree's size out once while sizing and
+     * again while writing - which costs a full re-descent per level. Sizing fills this in the order the
+     * write reads it back, so each size is computed exactly once.
+     */
+    private void emitSizePlan(Java out) {
+        if (!features.contains(Feature.SIZES)) {
+            return;
+        }
+        out.blank();
+        out.javadoc("""
+                The sizes of the nested payloads of one message, in the order the write needs them.
+
+                <p>Not thread safe, and meaningful only between the sizing pass that fills it and the write
+                that drains it.""");
+        out.line("static final class Sizes {");
+        out.indent();
+        out.blank();
+        out.line("private int[] a = new int[16];");
+        out.line("private int n;");
+        out.line("private int i;");
+        out.blank();
+        out.javadoc("""
+                Takes the next slot, to be filled once the subtree below it has been measured.
+
+                @return the slot index""");
+        out.line("int reserve() {");
+        out.indent();
+        out.line("if (n == a.length) {");
+        out.line("    a = Arrays.copyOf(a, n * 2);");
+        out.line("}");
+        out.line("return n++;");
+        out.outdent();
+        out.line("}");
+        out.blank();
+        out.line("void set(int slot, int size) {");
+        out.line("    a[slot] = size;");
+        out.line("}");
+        out.blank();
+        out.javadoc("""
+                @return the next size, in the order sizing reserved them""");
+        out.line("int next() {");
+        out.line("    return a[i++];");
+        out.line("}");
+        out.blank();
+        out.javadoc("""
+                Turns a filled plan into one ready to be read back.
+
+                @return this plan""");
+        out.line("Sizes rewind() {");
+        out.indent();
+        out.line("i = 0;");
+        out.line("return this;");
         out.outdent();
         out.line("}");
         out.outdent();

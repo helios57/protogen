@@ -66,7 +66,7 @@ public final class JavaGenerator {
         for (String javaPackage : schema.javaPackages()) {
             List<ProtoFile> files = schema.filesIn(javaPackage);
 
-            EnumSet<Feature> features = Feature.of(files, options.preserveUnknownFields());
+            EnumSet<Feature> features = Feature.of(files, javaPackage, options.preserveUnknownFields());
             out.add(new GeneratedFile(path(javaPackage, "ProtoWire"),
                     new CodecEmitter(features).emit(javaPackage)));
 

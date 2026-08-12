@@ -64,7 +64,11 @@ public enum Feature {
     /** {@code array}/{@code slice}, needed to hand a submessage its byte range without copying. */
     R_SLICE,
     /** The growable buffer and {@code copyField}, needed only when unknown fields are preserved. */
-    UNKNOWN;
+    UNKNOWN,
+    /** The immutable map view a record's map component is normalised to. */
+    MAP_VIEW,
+    /** The list of nested sizes an encode computes once and the write consumes. */
+    SIZES;
 
     /**
      * The helpers this one is implemented in terms of.
@@ -105,32 +109,33 @@ public enum Feature {
      * Collects the helpers needed by every message in the given files.
      *
      * @param files                 the files generating into one Java package
+     * @param javaPackage           the package being generated, which decides how submessages are read
      * @param preserveUnknownFields whether the unknown-field capture helpers are needed
      * @return the closed set of helpers to emit
      */
-    public static EnumSet<Feature> of(List<ProtoFile> files, boolean preserveUnknownFields) {
+    public static EnumSet<Feature> of(List<ProtoFile> files, String javaPackage, boolean preserveUnknownFields) {
         EnumSet<Feature> used = EnumSet.noneOf(Feature.class);
         if (preserveUnknownFields) {
             used.add(Feature.UNKNOWN);
         }
         for (ProtoFile file : files) {
             for (Defs.MessageDef m : file.messages()) {
-                collect(m, used);
+                collect(m, javaPackage, used);
             }
         }
         return close(used);
     }
 
-    private static void collect(Defs.MessageDef message, EnumSet<Feature> used) {
+    private static void collect(Defs.MessageDef message, String javaPackage, EnumSet<Feature> used) {
         for (Defs.FieldDef field : message.fields()) {
-            collect(field, used);
+            collect(field, javaPackage, used);
         }
         for (Defs.MessageDef nested : message.nestedMessages()) {
-            collect(nested, used);
+            collect(nested, javaPackage, used);
         }
     }
 
-    private static void collect(Defs.FieldDef field, EnumSet<Feature> used) {
+    private static void collect(Defs.FieldDef field, String javaPackage, EnumSet<Feature> used) {
         if (field.repeated() && isPacked(field)) {
             used.add(Feature.R_LIMIT);
             used.add(Feature.W_UVARINT32);
@@ -145,7 +150,11 @@ public enum Feature {
             case MESSAGE -> {
                 used.add(Feature.W_UVARINT32);
                 used.add(Feature.S_UVARINT32);
-                used.add(Feature.R_SLICE);
+                used.add(Feature.SIZES);
+                // a message from this package is parsed off the shared reader, one from another gets bytes
+                used.add(field.resolved().file().javaPackage().equals(javaPackage)
+                        ? Feature.R_LIMIT
+                        : Feature.R_SLICE);
             }
             case TIMESTAMP -> {
                 // encoded as an int64 of epoch milliseconds
@@ -156,8 +165,10 @@ public enum Feature {
                 used.add(Feature.W_UVARINT32);
                 used.add(Feature.S_UVARINT32);
                 used.add(Feature.R_LIMIT);
-                collect(field.mapKey(), used);
-                collect(field.mapValue(), used);
+                used.add(Feature.MAP_VIEW);
+                used.add(Feature.SIZES);
+                collect(field.mapKey(), javaPackage, used);
+                collect(field.mapValue(), javaPackage, used);
             }
             default -> throw new IllegalStateException("unresolved field " + field.name());
         }

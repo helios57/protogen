@@ -102,7 +102,7 @@ final class MessageEmitter {
         emitParse(out, message, fields);
         emitProtoSize(out, fields);
         emitWriteTo(out, fields);
-        emitToByteArray(out);
+        emitToByteArray(out, fields);
         emitValueSemantics(out, message, fields);
 
         out.outdent();
@@ -200,8 +200,8 @@ final class MessageEmitter {
         for (Defs.FieldDef f : fields) {
             String n = Names.fieldName(f.name());
             if (f.kind() == Defs.Kind.MAP) {
-                body.add(n + " = " + n + " == null ? java.util.Map.of()"
-                        + " : java.util.Collections.unmodifiableMap(new java.util.LinkedHashMap<>(" + n + "));");
+                // ProtoWire.map copies unless the map is one parse built and handed over, which nobody else holds
+                body.add(n + " = ProtoWire.map(" + n + ");");
             } else if (f.repeated()) {
                 body.add(n + " = " + n + " == null ? java.util.List.of() : java.util.List.copyOf(" + n + ");");
             } else if (!Types.nullable(f)) {
@@ -570,7 +570,9 @@ final class MessageEmitter {
 
         List<String> arguments = new ArrayList<>();
         for (Defs.FieldDef f : fields) {
-            arguments.add(Names.fieldName(f.name()));
+            String n = Names.fieldName(f.name());
+            // nobody else holds a map parse just built, so hand it over instead of letting it be copied
+            arguments.add(f.kind() == Defs.Kind.MAP ? "ProtoWire.own(" + n + ")" : n);
         }
         if (unknownComponent() != null) {
             arguments.add(locals.unknown + " == null ? new byte[0] : " + locals.unknown + ".toByteArray()");
@@ -620,9 +622,7 @@ final class MessageEmitter {
             if (f.mapValue().kind() == Defs.Kind.MESSAGE) {
                 out.line("case " + Types.tag(f.mapValue()) + " -> {");
                 out.indent();
-                out.line("int " + locals.len + " = " + r + ".uvarint32();");
-                out.line(locals.value + " = " + Types.javaName(f.mapValue().resolved(), javaPackage)
-                        + ".parseFrom(" + r + ".array(), " + r + ".slice(" + locals.len + "), " + locals.len + ");");
+                emitReadMessage(out, locals.value + " = ", f.mapValue(), "", locals.valueLimit);
                 out.outdent();
                 out.line("}");
             } else {
@@ -668,9 +668,7 @@ final class MessageEmitter {
                 out.indent();
                 emitLazyList(out, n);
                 if (f.kind() == Defs.Kind.MESSAGE) {
-                    out.line("int " + locals.len + " = " + r + ".uvarint32();");
-                    out.line(n + ".add(" + Types.javaName(f.resolved(), javaPackage) + ".parseFrom(" + r
-                            + ".array(), " + r + ".slice(" + locals.len + "), " + locals.len + "));");
+                    emitReadMessage(out, n + ".add(", f, ")");
                 } else {
                     out.line(n + ".add(" + readExpr(f) + ");");
                 }
@@ -684,9 +682,7 @@ final class MessageEmitter {
         if (f.kind() == Defs.Kind.MESSAGE) {
             out.line("case " + Types.writtenTag(f) + " -> {");
             out.indent();
-            out.line("int " + locals.len + " = " + r + ".uvarint32();");
-            out.line(n + " = " + Types.javaName(f.resolved(), javaPackage) + ".parseFrom(" + r + ".array(), "
-                    + r + ".slice(" + locals.len + "), " + locals.len + ");");
+            emitReadMessage(out, n + " = ", f);
             siblings.forEach(s -> out.line(s + " = null;"));
             out.outdent();
             out.line("}");
@@ -702,6 +698,36 @@ final class MessageEmitter {
             out.outdent();
             out.line("}");
         }
+    }
+
+    private void emitReadMessage(Java out, String prefix, Defs.FieldDef f) {
+        emitReadMessage(out, prefix, f, "", locals.limit);
+    }
+
+    private void emitReadMessage(Java out, String prefix, Defs.FieldDef f, String suffix) {
+        emitReadMessage(out, prefix, f, suffix, locals.limit);
+    }
+
+    /**
+     * Reads a submessage into {@code prefix ... suffix}.
+     * <p>
+     * A message generated into this package is parsed straight off the shared reader, bounded by a pushed
+     * limit - one fewer reader allocated per submessage, which is the difference between a batch of a
+     * hundred and a hundred readers. One from another package only exposes {@code parseFrom(byte[])}, so
+     * that one gets its byte range handed to it.
+     */
+    private void emitReadMessage(Java out, String prefix, Defs.FieldDef f, String suffix, String limit) {
+        String r = locals.reader;
+        String type = Types.javaName(f.resolved(), javaPackage);
+        if (Types.inPackage(f.resolved(), javaPackage)) {
+            out.line("int " + limit + " = " + r + ".pushLimit(" + r + ".uvarint32());");
+            out.line(prefix + type + ".parse(" + r + ")" + suffix + ";");
+            out.line(r + ".popLimit(" + limit + ");");
+            return;
+        }
+        out.line("int " + locals.len + " = " + r + ".uvarint32();");
+        out.line(prefix + type + ".parseFrom(" + r + ".array(), " + r + ".slice(" + locals.len + "), "
+                + locals.len + ")" + suffix + ";");
     }
 
     private void emitLazyList(Java out, String n) {
@@ -750,16 +776,38 @@ final class MessageEmitter {
 
     // -------------------------------------------------------------- sizing
 
+    /**
+     * Whether this message has payloads whose size the write needs again.
+     * <p>
+     * Only then is a size plan worth its allocation: a message of scalars knows every size from the value
+     * in front of it.
+     */
+    private static boolean plans(List<Defs.FieldDef> fields) {
+        return fields.stream().anyMatch(f -> f.kind() == Defs.Kind.MESSAGE || f.kind() == Defs.Kind.MAP);
+    }
+
     private void emitProtoSize(Java out, List<Defs.FieldDef> fields) {
         out.blank();
         if (emitJavadoc) {
             out.javadoc("@return the number of bytes {@link #toByteArray()} produces");
         }
         out.line("public int protoSize() {");
+        emitProtoSizeBody(out, fields, null);
+
+        if (!plans(fields)) {
+            return;
+        }
+        out.blank();
+        out.line("/** Sizes as above, recording each nested payload so the write does not measure it again. */");
+        out.line("int protoSize(ProtoWire.Sizes " + locals.sizes + ") {");
+        emitProtoSizeBody(out, fields, locals.sizes);
+    }
+
+    private void emitProtoSizeBody(Java out, List<Defs.FieldDef> fields, String plan) {
         out.indent();
         out.line("int " + locals.size + " = 0;");
         for (Defs.FieldDef f : fields) {
-            emitSizeFor(out, f);
+            emitSizeFor(out, f, plan);
         }
         if (unknownComponent() != null) {
             out.line(locals.size + " += " + unknownComponent() + ".length;");
@@ -769,7 +817,26 @@ final class MessageEmitter {
         out.line("}");
     }
 
-    private void emitSizeFor(Java out, Defs.FieldDef f) {
+    /**
+     * Whether a submessage takes the plan itself.
+     * <p>
+     * Only if it is in this package, so its package-private overloads are reachable, and only if it has
+     * nested payloads of its own - a message of scalars has nothing to record and does not get the
+     * overloads at all.
+     */
+    private boolean handsDownPlan(Defs.FieldDef f, String plan) {
+        return plan != null
+                && Types.inPackage(f.resolved(), javaPackage)
+                && f.resolved() instanceof Defs.MessageDef m
+                && plans(m.fields());
+    }
+
+    /** The size of a submessage, measured into the plan when there is one and it can be handed down. */
+    private String nestedSizeExpr(Defs.FieldDef f, String value, String plan) {
+        return value + ".protoSize(" + (handsDownPlan(f, plan) ? plan : "") + ")";
+    }
+
+    private void emitSizeFor(Java out, Defs.FieldDef f, String plan) {
         String n = Names.fieldName(f.name());
         String size = locals.size;
         int tagSize = Types.tagSize(Types.writtenTag(f));
@@ -777,7 +844,7 @@ final class MessageEmitter {
         if (f.kind() == Defs.Kind.MAP) {
             emitMapLoopHeader(out, f, n);
             out.indent();
-            emitEntrySize(out, f);
+            emitEntrySize(out, f, plan);
             out.line(size + " += " + tagSize + " + ProtoWire.sUVarint32(" + locals.entrySize + ") + "
                     + locals.entrySize + ";");
             out.outdent();
@@ -789,10 +856,16 @@ final class MessageEmitter {
             if (Feature.isPacked(f)) {
                 out.line("if (!" + n + ".isEmpty()) {");
                 out.indent();
+                if (plan != null) {
+                    out.line("int " + locals.slot + " = " + plan + ".reserve();");
+                }
                 out.line("int " + locals.payload + " = 0;");
                 out.line("for (" + Types.boxedElementType(f, javaPackage) + " " + locals.element + " : " + n + ") {");
                 out.line("    " + locals.payload + " += " + sizeExpr(f, locals.element) + ";");
                 out.line("}");
+                if (plan != null) {
+                    out.line(plan + ".set(" + locals.slot + ", " + locals.payload + ");");
+                }
                 out.line(size + " += " + tagSize + " + ProtoWire.sUVarint32(" + locals.payload + ") + "
                         + locals.payload + ";");
                 out.outdent();
@@ -800,7 +873,7 @@ final class MessageEmitter {
             } else if (f.kind() == Defs.Kind.MESSAGE) {
                 out.line("for (" + Types.boxedElementType(f, javaPackage) + " " + locals.element + " : " + n + ") {");
                 out.indent();
-                out.line("int " + locals.nested + " = " + locals.element + ".protoSize();");
+                emitNestedSize(out, f, locals.element, plan);
                 out.line(size + " += " + tagSize + " + ProtoWire.sUVarint32(" + locals.nested + ") + "
                         + locals.nested + ";");
                 out.outdent();
@@ -816,7 +889,7 @@ final class MessageEmitter {
         if (f.kind() == Defs.Kind.MESSAGE) {
             out.line("if (" + n + " != null) {");
             out.indent();
-            out.line("int " + locals.nested + " = " + n + ".protoSize();");
+            emitNestedSize(out, f, n, plan);
             out.line(size + " += " + tagSize + " + ProtoWire.sUVarint32(" + locals.nested + ") + "
                     + locals.nested + ";");
             out.outdent();
@@ -827,6 +900,22 @@ final class MessageEmitter {
         out.line("if (" + presenceCondition(f) + ") {");
         out.line("    " + size + " += " + tagSize + " + " + sizeExpr(f, n) + ";");
         out.line("}");
+    }
+
+    /**
+     * Measures a submessage into {@code locals.nested}.
+     * <p>
+     * The slot is taken before descending, so the plan reads back outermost first - which is the order the
+     * write needs, since a length prefix goes in front of the payload it measures.
+     */
+    private void emitNestedSize(Java out, Defs.FieldDef f, String value, String plan) {
+        if (plan == null) {
+            out.line("int " + locals.nested + " = " + value + ".protoSize();");
+            return;
+        }
+        out.line("int " + locals.slot + " = " + plan + ".reserve();");
+        out.line("int " + locals.nested + " = " + nestedSizeExpr(f, value, plan) + ";");
+        out.line(plan + ".set(" + locals.slot + ", " + locals.nested + ");");
     }
 
     private void emitMapLoopHeader(Java out, Defs.FieldDef f, String n) {
@@ -840,17 +929,32 @@ final class MessageEmitter {
      * submessage. protoc always writes both key and value of a map entry, even at their defaults, so these
      * sizes are unconditional.
      */
-    private void emitEntrySize(Java out, Defs.FieldDef f) {
+    private void emitEntrySize(Java out, Defs.FieldDef f, String plan) {
         String keySize = Types.tagSize(Types.tag(f.mapKey())) + " + "
                 + sizeExpr(f.mapKey(), locals.entry + ".getKey()");
         int valueTagSize = Types.tagSize(Types.tag(f.mapValue()));
-        if (f.mapValue().kind() == Defs.Kind.MESSAGE) {
-            out.line("int " + locals.valueSize + " = " + locals.entry + ".getValue().protoSize();");
+        boolean messageValue = f.mapValue().kind() == Defs.Kind.MESSAGE;
+        if (plan != null) {
+            // the entry's own length prefix comes first on the wire, so its slot is taken first
+            out.line("int " + locals.slot + " = " + plan + ".reserve();");
+            if (messageValue) {
+                out.line("int " + locals.valueSlot + " = " + plan + ".reserve();");
+            }
+        }
+        if (messageValue) {
+            out.line("int " + locals.valueSize + " = "
+                    + nestedSizeExpr(f.mapValue(), locals.entry + ".getValue()", plan) + ";");
+            if (plan != null) {
+                out.line(plan + ".set(" + locals.valueSlot + ", " + locals.valueSize + ");");
+            }
             out.line("int " + locals.entrySize + " = " + keySize + " + " + valueTagSize
                     + " + ProtoWire.sUVarint32(" + locals.valueSize + ") + " + locals.valueSize + ";");
         } else {
             out.line("int " + locals.entrySize + " = " + keySize + " + " + valueTagSize + " + "
                     + sizeExpr(f.mapValue(), locals.entry + ".getValue()") + ";");
+        }
+        if (plan != null) {
+            out.line(plan + ".set(" + locals.slot + ", " + locals.entrySize + ");");
         }
     }
 
@@ -914,10 +1018,31 @@ final class MessageEmitter {
                     @return the position just past the last byte written""")
                     .formatted(locals.target, locals.offset, locals.target));
         }
+        if (plans(fields)) {
+            // the plan the write reads has to be filled first; toByteArray already has one to hand over
+            out.line("public int writeTo(byte[] " + locals.target + ", int " + locals.offset + ") {");
+            out.indent();
+            out.line("ProtoWire.Sizes " + locals.sizes + " = new ProtoWire.Sizes();");
+            out.line("protoSize(" + locals.sizes + ");");
+            out.line("return writeTo(" + locals.target + ", " + locals.offset + ", "
+                    + locals.sizes + ".rewind());");
+            out.outdent();
+            out.line("}");
+            out.blank();
+            out.line("/** Writes as above, taking each nested length from the plan instead of measuring again. */");
+            out.line("int writeTo(byte[] " + locals.target + ", int " + locals.offset
+                    + ", ProtoWire.Sizes " + locals.sizes + ") {");
+            emitWriteToBody(out, fields, locals.sizes);
+            return;
+        }
         out.line("public int writeTo(byte[] " + locals.target + ", int " + locals.offset + ") {");
+        emitWriteToBody(out, fields, null);
+    }
+
+    private void emitWriteToBody(Java out, List<Defs.FieldDef> fields, String plan) {
         out.indent();
         for (Defs.FieldDef f : fields) {
-            emitWriteFor(out, f);
+            emitWriteFor(out, f, plan);
         }
         if (unknownComponent() != null) {
             // appended verbatim, after the known fields; protobuf places no ordering requirement on tags
@@ -935,14 +1060,21 @@ final class MessageEmitter {
         out.line("}");
     }
 
-    private void emitWriteFor(Java out, Defs.FieldDef f) {
+    private void emitWriteFor(Java out, Defs.FieldDef f, String plan) {
         String n = Names.fieldName(f.name());
 
         if (f.kind() == Defs.Kind.MAP) {
             emitMapLoopHeader(out, f, n);
             out.indent();
             emitTagWrite(out, Types.writtenTag(f));
-            emitEntrySize(out, f);
+            if (plan != null) {
+                out.line("int " + locals.entrySize + " = " + plan + ".next();");
+                if (f.mapValue().kind() == Defs.Kind.MESSAGE) {
+                    out.line("int " + locals.valueSize + " = " + plan + ".next();");
+                }
+            } else {
+                emitEntrySize(out, f, null);
+            }
             out.line(locals.offset + " = ProtoWire.wUVarint32(" + locals.target + ", " + locals.offset
                     + ", " + locals.entrySize + ");");
             emitTagWrite(out, Types.tag(f.mapKey()));
@@ -951,8 +1083,8 @@ final class MessageEmitter {
             if (f.mapValue().kind() == Defs.Kind.MESSAGE) {
                 out.line(locals.offset + " = ProtoWire.wUVarint32(" + locals.target + ", " + locals.offset
                         + ", " + locals.valueSize + ");");
-                out.line(locals.offset + " = " + locals.entry + ".getValue().writeTo(" + locals.target
-                        + ", " + locals.offset + ");");
+                out.line(locals.offset + " = " + nestedWriteExpr(f.mapValue(),
+                        locals.entry + ".getValue()", plan) + ";");
             } else {
                 emitValueWrite(out, f.mapValue(), locals.entry + ".getValue()");
             }
@@ -966,10 +1098,15 @@ final class MessageEmitter {
                 out.line("if (!" + n + ".isEmpty()) {");
                 out.indent();
                 emitTagWrite(out, Types.writtenTag(f));
-                out.line("int " + locals.payload + " = 0;");
-                out.line("for (" + Types.boxedElementType(f, javaPackage) + " " + locals.element + " : " + n + ") {");
-                out.line("    " + locals.payload + " += " + sizeExpr(f, locals.element) + ";");
-                out.line("}");
+                if (plan != null) {
+                    out.line("int " + locals.payload + " = " + plan + ".next();");
+                } else {
+                    out.line("int " + locals.payload + " = 0;");
+                    out.line("for (" + Types.boxedElementType(f, javaPackage) + " " + locals.element + " : "
+                            + n + ") {");
+                    out.line("    " + locals.payload + " += " + sizeExpr(f, locals.element) + ";");
+                    out.line("}");
+                }
                 out.line(locals.offset + " = ProtoWire.wUVarint32(" + locals.target + ", " + locals.offset
                         + ", " + locals.payload + ");");
                 out.line("for (" + Types.boxedElementType(f, javaPackage) + " " + locals.element + " : " + n + ") {");
@@ -983,10 +1120,7 @@ final class MessageEmitter {
                 out.line("for (" + Types.boxedElementType(f, javaPackage) + " " + locals.element + " : " + n + ") {");
                 out.indent();
                 emitTagWrite(out, Types.writtenTag(f));
-                out.line(locals.offset + " = ProtoWire.wUVarint32(" + locals.target + ", " + locals.offset
-                        + ", " + locals.element + ".protoSize());");
-                out.line(locals.offset + " = " + locals.element + ".writeTo(" + locals.target + ", "
-                        + locals.offset + ");");
+                emitNestedWrite(out, f, locals.element, plan);
                 out.outdent();
                 out.line("}");
             } else {
@@ -1004,9 +1138,7 @@ final class MessageEmitter {
             out.line("if (" + n + " != null) {");
             out.indent();
             emitTagWrite(out, Types.writtenTag(f));
-            out.line(locals.offset + " = ProtoWire.wUVarint32(" + locals.target + ", " + locals.offset
-                    + ", " + n + ".protoSize());");
-            out.line(locals.offset + " = " + n + ".writeTo(" + locals.target + ", " + locals.offset + ");");
+            emitNestedWrite(out, f, n, plan);
             out.outdent();
             out.line("}");
             return;
@@ -1018,6 +1150,20 @@ final class MessageEmitter {
         emitValueWrite(out, f, n);
         out.outdent();
         out.line("}");
+    }
+
+    /** Writes a submessage's length prefix, from the plan when there is one, and then the message. */
+    private void emitNestedWrite(Java out, Defs.FieldDef f, String value, String plan) {
+        String length = plan == null ? value + ".protoSize()" : plan + ".next()";
+        out.line(locals.offset + " = ProtoWire.wUVarint32(" + locals.target + ", " + locals.offset
+                + ", " + length + ");");
+        out.line(locals.offset + " = " + nestedWriteExpr(f, value, plan) + ";");
+    }
+
+    /** A message in this package reads on from the same plan; one from another package makes its own. */
+    private String nestedWriteExpr(Defs.FieldDef f, String value, String plan) {
+        return value + ".writeTo(" + locals.target + ", " + locals.offset
+                + (handsDownPlan(f, plan) ? ", " + plan : "") + ")";
     }
 
     /** Tags are compile-time constants, so a single-byte tag becomes a direct store. */
@@ -1061,15 +1207,21 @@ final class MessageEmitter {
         }
     }
 
-    private void emitToByteArray(Java out) {
+    private void emitToByteArray(Java out, List<Defs.FieldDef> fields) {
         out.blank();
         if (emitJavadoc) {
             out.javadoc("@return this message in its protobuf encoding");
         }
         out.line("public byte[] toByteArray() {");
         out.indent();
-        out.line("byte[] " + locals.out + " = new byte[protoSize()];");
-        out.line("writeTo(" + locals.out + ", 0);");
+        if (plans(fields)) {
+            out.line("ProtoWire.Sizes " + locals.sizes + " = new ProtoWire.Sizes();");
+            out.line("byte[] " + locals.out + " = new byte[protoSize(" + locals.sizes + ")];");
+            out.line("writeTo(" + locals.out + ", 0, " + locals.sizes + ".rewind());");
+        } else {
+            out.line("byte[] " + locals.out + " = new byte[protoSize()];");
+            out.line("writeTo(" + locals.out + ", 0);");
+        }
         out.line("return " + locals.out + ";");
         out.outdent();
         out.line("}");

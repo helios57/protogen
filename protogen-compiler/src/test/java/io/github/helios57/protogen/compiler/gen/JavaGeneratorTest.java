@@ -217,15 +217,31 @@ class JavaGeneratorTest {
     }
 
     @Test
-    void aSchemaWithSubmessagesGetsTheZeroCopySliceHelpers() {
-        String codec = generate("""
+    void aSubmessageInTheSamePackageIsParsedOffTheSharedReader() {
+        java.util.Map<String, String> generated = generate("""
                 syntax = "proto3";
                 option java_package = "x";
+                option java_multiple_files = true;
                 message Inner { bool b = 1; }
                 message Outer { Inner inner = 1; }
-                """).get("x/ProtoWire.java");
+                """);
 
-        assertThat(codec).contains("int slice(").contains("byte[] array()");
+        // no second reader is allocated for it, so the byte-range helpers are not needed either
+        assertThat(generated.get("x/Outer.java")).contains("Inner.parse(r)");
+        assertThat(generated.get("x/ProtoWire.java")).contains("pushLimit").doesNotContain("int slice(");
+    }
+
+    @Test
+    void aSubmessageFromAnotherPackageIsHandedItsBytes() {
+        java.util.Map<String, String> generated = generate(
+                "syntax = \"proto3\";\npackage a;\noption java_package = \"x\";\n"
+                        + "option java_multiple_files = true;\nmessage Inner { bool b = 1; }\n",
+                "syntax = \"proto3\";\nimport \"file0.proto\";\npackage a;\noption java_package = \"y\";\n"
+                        + "option java_multiple_files = true;\nmessage Outer { Inner inner = 1; }\n");
+
+        // across a package boundary a message only exposes parseFrom(byte[]), which keeps the packages apart
+        assertThat(generated.get("y/Outer.java")).contains("x.Inner.parseFrom(r.array()");
+        assertThat(generated.get("y/ProtoWire.java")).contains("int slice(").contains("byte[] array()");
     }
 
     @Test

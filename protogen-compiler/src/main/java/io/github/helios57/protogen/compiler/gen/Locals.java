@@ -30,10 +30,18 @@ final class Locals {
     final String key;
     final String value;
     final String limit;
+    /** A second limit, for a submessage read inside a map entry, which has pushed one of its own. */
+    final String valueLimit;
     final String entryTag;
     final String len;
     final String payload;
     final String nested;
+    /** The plan of nested sizes, computed while sizing and read back while writing. */
+    final String sizes;
+    /** The slot in that plan a size is written back into once its subtree has been measured. */
+    final String slot;
+    /** A second slot, for the entry a map with message values reserves before descending. */
+    final String valueSlot;
     final String entrySize;
     final String valueSize;
     final String candidate;
@@ -60,10 +68,14 @@ final class Locals {
         this.key = free("key", taken);
         this.value = free("value", taken);
         this.limit = free("limit", taken);
+        this.valueLimit = free("valueLimit", taken);
         this.entryTag = free("entryTag", taken);
         this.len = free("len", taken);
         this.payload = free("payload", taken);
         this.nested = free("nested", taken);
+        this.sizes = free("sizes", taken);
+        this.slot = free("slot", taken);
+        this.valueSlot = free("valueSlot", taken);
         this.entrySize = free("entrySize", taken);
         this.valueSize = free("valueSize", taken);
         this.candidate = free("o", taken);

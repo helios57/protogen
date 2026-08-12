@@ -60,6 +60,17 @@ final class Types {
         return out.append(nested).toString();
     }
 
+    /**
+     * Whether a referenced type is generated into the package being emitted.
+     * <p>
+     * Only then can its package-private {@code parse(ProtoWire.R)} be called: across a package boundary a
+     * message's surface is {@code byte[]} and {@code int}, which is what keeps generated packages from
+     * depending on one another.
+     */
+    static boolean inPackage(Defs.TypeDef def, String currentPackage) {
+        return def.file().javaPackage().equals(currentPackage);
+    }
+
     /** The name to write in source, shortened when the type lives in {@code currentPackage}. */
     static String javaName(Defs.TypeDef def, String currentPackage) {
         String full = javaName(def);
