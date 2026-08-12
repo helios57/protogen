@@ -6,8 +6,8 @@ import io.github.helios57.protogen.compiler.model.ProtoFile;
 import io.github.helios57.protogen.compiler.model.ScalarType;
 
 import java.util.ArrayDeque;
-import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -187,13 +187,14 @@ public final class Linker {
     }
 
     private void assertUniqueFieldNumbers(Defs.MessageDef message) {
-        List<Integer> seen = new ArrayList<>();
+        // a set rather than a list scan: a message with a thousand fields would otherwise cost half a
+        // million comparisons here, which showed up as most of the link time when profiling
+        Set<Integer> seen = new HashSet<>();
         for (Defs.FieldDef f : message.fields()) {
-            if (seen.contains(f.number())) {
+            if (!seen.add(f.number())) {
                 throw new ProtoCompileException(f.pos(),
                         "field number " + f.number() + " is used twice in message '" + message.name() + "'");
             }
-            seen.add(f.number());
         }
         assertNotReserved(message);
     }

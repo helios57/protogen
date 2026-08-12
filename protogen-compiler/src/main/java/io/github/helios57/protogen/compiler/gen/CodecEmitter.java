@@ -121,7 +121,12 @@ final class CodecEmitter {
         }
         if (features.contains(Feature.W_STRING)) {
             out.blank();
-            out.javadoc("Writes a length-prefixed UTF-8 string.");
+            out.javadoc("""
+                    Writes a length-prefixed UTF-8 string.
+
+                    <p>Encoding character by character straight into {@code b} would save this array and
+                    this copy, and measures slower every time: on a compact string {@code getBytes} is an
+                    intrinsic that moves bytes in bulk, which no hand-rolled loop here beats.""");
             out.line("static int wString(byte[] b, int p, String value) {");
             out.indent();
             out.line("byte[] utf8 = value.getBytes(StandardCharsets.UTF_8);");
@@ -329,6 +334,16 @@ final class CodecEmitter {
         out.blank();
         out.line("int uvarint32() {");
         out.indent();
+        out.line("// almost every varint in a real message is one byte: a small tag, length or number");
+        out.line("if (p < end) {");
+        out.indent();
+        out.line("int first = b[p];");
+        out.line("if (first >= 0) {");
+        out.line("    p++;");
+        out.line("    return first;");
+        out.line("}");
+        out.outdent();
+        out.line("}");
         out.line("int result = 0;");
         out.line("for (int shift = 0; shift < 32; shift += 7) {");
         out.indent();
@@ -354,6 +369,15 @@ final class CodecEmitter {
         out.blank();
         out.line("long varint64() {");
         out.indent();
+        out.line("if (p < end) {");
+        out.indent();
+        out.line("int first = b[p];");
+        out.line("if (first >= 0) {");
+        out.line("    p++;");
+        out.line("    return first;");
+        out.line("}");
+        out.outdent();
+        out.line("}");
         out.line("long result = 0;");
         out.line("for (int shift = 0; shift < 64; shift += 7) {");
         out.indent();

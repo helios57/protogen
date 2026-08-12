@@ -26,8 +26,21 @@ final class Java {
             sb.append('\n');
             return;
         }
+        // by far the common case, and splitting every line was the emitter's largest single cost
+        if (text.indexOf('\n') < 0) {
+            appendIndent();
+            sb.append(text).append('\n');
+            return;
+        }
         for (String part : text.split("\n", -1)) {
-            sb.append(INDENT.repeat(depth)).append(part).append('\n');
+            appendIndent();
+            sb.append(part).append('\n');
+        }
+    }
+
+    private void appendIndent() {
+        for (int i = 0; i < depth; i++) {
+            sb.append(INDENT);
         }
     }
 
