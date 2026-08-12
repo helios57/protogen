@@ -12,9 +12,18 @@
 
     <artifactId>protogen-compiler</artifactId>
     <name>protogen :: compiler</name>
-    <description>Parses .proto files and emits self-contained Java sources. Build-tool agnostic, no dependencies.</description>
+    <description>Parses .proto and AsyncAPI schemas and emits self-contained Java sources. Build-tool agnostic.</description>
 
     <dependencies>
+        <!--
+          The only dependency, and only at generation time: AsyncAPI documents are YAML, and hand-rolling
+          a YAML parser is not a good trade. Nothing here reaches generated code, which stays JDK-only.
+        -->
+        <dependency>
+            <groupId>org.yaml</groupId>
+            <artifactId>snakeyaml</artifactId>
+            <version>${snakeyaml.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
