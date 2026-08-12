@@ -6,8 +6,8 @@ The build itself needs no native `protoc`.
 
 See [RESEARCH.md](RESEARCH.md) for why this does not exist yet.
 
-**Status:** phases 0–5 are done. proto3 messages generate, round-trip, and are byte-identical to `protoc`
-across 310 tests. Phase 6 (benchmarking) and phase 7 (release) are open.
+**Status:** phases 0–7 are done. proto2 and proto3 messages generate, round-trip, and are byte-identical to
+`protoc` across 419 tests; 0.1.0 is on Maven Central. AsyncAPI 2.x and 3.x are read as a second input.
 
 ---
 
@@ -27,16 +27,21 @@ across 310 tests. Phase 6 (benchmarking) and phase 7 (release) are open.
 
 ```
 protogen/
-├── protogen-compiler/          pure library: .proto -> Java source text, no dependencies
+├── protogen-compiler/          pure library: .proto and AsyncAPI -> Java source text
 │   ├── lexer/ parser/          hand-written front-end, comment-retaining
 │   ├── model/ linker/          declaration tree, symbol table, type resolution
+│   ├── asyncapi/               2.x and 3.x into one model, plus the scaffold emitter
 │   └── gen/                    emitters: codec, message, enum
 ├── protogen-maven-plugin/      the protogen:generate Mojo, a thin wrapper
 ├── protogen-it/                zero-dependency proof: generate -> compile -> run
-└── protogen-interop/           differential tests against protoc + protobuf-java
+├── protogen-interop/           differential tests against protoc + protobuf-java
+└── protogen-benchmark/         JMH, against protobuf-java on the same schemas
 ```
 
-`protogen-compiler` holds no Maven types, so the same compiler can drive a CLI or a Gradle plugin later.
+`protogen-compiler` holds no Maven types, so the same compiler can drive a CLI or a Gradle plugin later. Its
+one dependency is a YAML parser, used at generation time to read AsyncAPI; nothing reaches generated code,
+which stays JDK-only. That invariant is the point of the whole project, and `protogen-it` asserts it against
+the built artifact rather than trusting it.
 
 ## 3. The generated API
 
@@ -88,8 +93,9 @@ public record NodeV1(
 * **Unknown fields are dropped by default**, because preserving them puts an extra component into every
   constructor and every `equals`. Turn on `preserveUnknownFields` where it matters — see §6.
 * **An unknown enum value becomes `UNRECOGNIZED`** and is not re-encoded. `protoc` keeps the raw number.
-* **`protoSize()` is recomputed** rather than memoised, because a record has no mutable field to cache in.
-  Serializing a tree of depth *d* walks it *d* times. Phase 6 revisits this if benchmarks justify it.
+* **`protoSize()` called on its own is recomputed** rather than memoised, because a record has no mutable
+  field to cache in. Encoding is not affected: `toByteArray()` measures each nested payload once into a
+  plan the write reads back, so nothing is measured twice.
 
 ## 4. Timestamp and Instant
 
@@ -229,6 +235,31 @@ Goal `protogen:generate`, default phase `generate-sources`.
 | `resourceOutputDirectory` | `${project.build.directory}/generated-resources/protogen` | where the sidecars land; added as a project resource |
 | `failOnUnsupported` | `true` | |
 | `skip` | `false` | |
+| `asyncApiSourceRoot` | *(unset)* | AsyncAPI documents to read as well (§7a) |
+| `scaffoldOutputDirectory` | `${project.build.directory}/protogen-scaffold` | where the scaffolding lands; never a source root (§7a) |
+| `scaffoldPackage` | package of the generated messages | package for the scaffolded Java |
+| `scaffoldChannels` / `scaffoldStubs` / `scaffoldBinderConfig` / `scaffoldNotes` | `true` | what to scaffold (§7a) |
+
+## 7a. AsyncAPI as a second input
+
+2.x keys channels by address with `publish`/`subscribe`; 3.0 gives them an id plus an `address` and moves
+the direction into `operations`. Both are normalised into one model, so everything downstream reads one
+shape. Two different kinds of output come out of it, and conflating them would be the mistake:
+
+* **Models** — the `.proto` a payload `$ref`s, and its imports, generated exactly as if they had been under
+  `protoSourceRoot`. A spec-first project therefore needs no proto source root at all. This is a build
+  output and is compiled.
+* **Scaffolding** — a channel address record per channel, a `java.util.function` stub per operation, and
+  the Spring Cloud Stream binding configuration for the Solace binder. This is **help**: written to a
+  throwaway directory, never added as a source root, never compiled by the build. A generator cannot know
+  how an application is wired, and code it guessed at has no business reaching a live source tree.
+
+The stubs bind `byte[]`, not the generated records, because a `byte[]` is what crosses the binder.
+Serializing the payload and compressing it when the content type says so is application logic; the
+scaffold points at that step rather than writing it.
+
+Because nothing in a normal build compiles the scaffolding, the tests compile it on purpose - otherwise it
+is exactly the kind of output that rots unnoticed.
 
 ## 8. Verification
 
@@ -260,7 +291,7 @@ encoded as one, `-0.0` skipped as if it were the default, and `Timestamp` presen
 | **3** | `repeated` packed and unpacked, `map`, `oneof`, `Instant`, validation | ✅ |
 | **4** | Mojo hardening: includes/excludes, offline, multi-module | ✅ |
 | **5** | Verification: zero-dependency compile and run, differential vs protoc, fuzz | ✅ |
-| **6** | Optimization: JMH harness against protobuf-java, CI | ✅ harness and numbers; size memoisation still to do |
+| **6** | Optimization: JMH harness against protobuf-java, CI | ✅ harness, numbers, and three rounds of profiling acted on |
 | **7** | Release: Maven Central publishing, signing, CI release workflow, Dependabot | ✅ wired; awaiting the account credentials in [RELEASING.md](RELEASING.md) |
 
 Measured results and how to read them: [BENCHMARKS.md](BENCHMARKS.md).
@@ -270,12 +301,13 @@ Measured results and how to read them: [BENCHMARKS.md](BENCHMARKS.md).
 1. ~~**Unknown-field preservation**~~ — **done**, as an opt-in (§5a). Still open: a differential test that
    has `protoc` produce the unknown fields from a genuine v2 schema, rather than the hand-built wire bytes
    the current test uses.
-2. ~~**`protoSize()` memoisation**~~ — **answered by measurement.** It costs nothing at depth 1, 1.5× at
-   depth 3 and 2.1× at depth 5 when the same instance is serialized repeatedly, and nothing at all when a
-   message is serialized once. Worth fixing, and without giving up records: have `toByteArray()` compute
-   child sizes once into a scratch array and thread it through `writeTo`, rather than caching per instance.
-   See [BENCHMARKS.md](BENCHMARKS.md).
+2. ~~**`protoSize()` memoisation**~~ — **done, without giving up records.** The sizing pass records each
+   nested payload's size in the order the write reads it back, so a subtree is measured once per encode
+   rather than once per level. Encoding a tree five deep went from 2.1× slower than protobuf-java to 1.34×
+   faster. See [BENCHMARKS.md](BENCHMARKS.md).
 3. ~~**Validation on parse**~~ — **done**: two switches, one at generation time and one at runtime (§5a).
    The runtime one gives the lenient parse for legacy data.
 4. ~~**`@Example` / `@RootNode`**~~ — **done**: a JSON sidecar under `META-INF/protogen/` (§5a). Still
    open: wiring that sidecar into the AsyncAPI generator itself, which lives in another repo.
+5. **Unknown enum values are still dropped** on re-encode, where `protoc` keeps the raw number. Preserving
+   one needs a second component per enum field, the same trade unknown fields make; nobody has needed it.
