@@ -16,7 +16,7 @@ and why.
 <plugin>
     <groupId>io.github.helios57.protogen</groupId>
     <artifactId>protogen-maven-plugin</artifactId>
-    <version>0.2.0</version>
+    <version>0.3.0</version>
     <executions>
         <execution><goals><goal>generate</goal></goals></execution>
     </executions>
@@ -179,7 +179,7 @@ There is one **runtime** switch, read by the generated code rather than the plug
 <plugin>
     <groupId>io.github.helios57.protogen</groupId>
     <artifactId>protogen-maven-plugin</artifactId>
-    <version>0.2.0</version>
+    <version>0.3.0</version>
     <executions>
         <execution><goals><goal>generate</goal></goals></execution>
     </executions>
