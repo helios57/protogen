@@ -7,8 +7,10 @@
 **A Maven plugin that turns `.proto` files into optimized, fully self-contained Java 17+ records.**
 
 The generated code compiles and runs against the **JDK alone** — no `protobuf-java`, no Netty, no runtime
-jar of any kind. Your build needs no native `protoc` binary either. The wire format is byte-identical to
-`protoc`, verified by a differential test suite that compiles the same schemas with both.
+jar of any kind. Your build needs no native `protoc` binary either. Messages interoperate with `protoc`
+both ways, verified by a differential suite that compiles the same schemas with both — see
+[Compatibility and deviations](#compatibility-and-deviations) for the handful of places the bytes differ
+and why.
 
 ```xml
 <plugin>
@@ -32,7 +34,7 @@ your project**, which is the entire point.
 - [Configuration](#configuration) · [Examples](#examples)
 - [Validation](#validation-from-the-schema) · [Unknown fields](#unknown-fields) ·
   [Timestamps](#timestamps) · [Documentation metadata](#documentation-metadata)
-- [Supported proto3](#supported-proto3) · [Performance](#performance) · [Limitations](#limitations)
+- [Supported schema features](#supported-schema-features) · [Compatibility and deviations](#compatibility-and-deviations) · [Performance](#performance)
 
 ## Why
 
@@ -346,7 +348,7 @@ read without re-parsing the schema or reflecting over the classes:
 
 Disable with `<emitSchemaMetadata>false</emitSchemaMetadata>`.
 
-## Supported proto3
+## Supported schema features
 
 | Feature | | Notes |
 |---|---|---|
@@ -355,16 +357,18 @@ Disable with `<emitSchemaMetadata>false</emitSchemaMetadata>`.
 | `enum`, nested, `allow_alias`, lower-case constants | ✅ | proto3's zero-value rule enforced; unknown values become `UNRECOGNIZED` |
 | nested and recursive messages | ✅ | |
 | cross-file and cross-package references | ✅ | proto scoping: innermost scope outward, leading dot forces absolute |
-| `repeated` | ✅ | packed on write, packed **and** unpacked accepted on read |
+| `repeated` | ✅ | packed per the syntax default, `[packed = ...]` honoured; packed **and** unpacked accepted on read |
 | `map<K,V>` | ✅ | including message values |
 | `oneof` | ✅ | siblings cleared on parse, at most one enforced on construction |
 | `optional` explicit presence | ✅ | |
-| `reserved` | ✅ | parsed |
+| `reserved` | ✅ | numbers, ranges, `to max` and names — **enforced** |
 | `import`, `import public` | ✅ | |
 | `java_package`, `java_multiple_files`, `java_outer_classname` | ✅ | both file layouts, incl. protoc's `OuterClass` collision suffix |
 | `google.protobuf.Timestamp` | ✅ | as `Instant`, see above |
 | comment → Javadoc, comment → validation | ✅ | |
-| other well-known types, `service`/gRPC, `extend`, groups, proto2, editions, JSON mapping | ❌ | rejected with a `file:line:col` diagnostic |
+| **proto2**: `required` / `optional` / `repeated`, `[default = ...]`, no zero-enum rule, `extensions` ranges | ✅ | a declared default is exposed as `<field>OrDefault()`, so presence is not lost |
+| field options: `packed`, `default`, `deprecated`, `json_name`, custom `(...)` | ✅ | parsed and kept; `packed` and `default` are acted on |
+| see [Compatibility and deviations](#compatibility-and-deviations) | | for what is not supported and why |
 
 Anything unsupported **fails the build with a located error**, never a silently wrong result.
 
@@ -385,14 +389,46 @@ mvn -Pbenchmark package -DskipTests
 java -jar protogen-benchmark/target/benchmarks.jar
 ```
 
-## Limitations
+## Compatibility and deviations
 
-- **Unknown fields are dropped** unless `preserveUnknownFields` is on.
-- **An unknown enum value becomes `UNRECOGNIZED`** and is not re-encoded; `protoc` keeps the raw number.
-- **`protoSize()` is recomputed rather than memoised** — a record has no mutable field to cache in. This
-  costs nothing when a message is serialized once, and up to 2.1× when the same deep instance is
-  serialized repeatedly.
-- **No gRPC, no JSON mapping, no proto2, no editions.**
+protogen aims at **mutual readability with `protoc`, not byte-identity**. In practice the encodings are
+identical for everything except the cases below, and where they differ both sides still read each other.
+Every deviation is listed here with the reason.
+
+### Deliberate deviations from protoc
+
+| Deviation | Why | Consequence |
+|---|---|---|
+| **`google.protobuf.Timestamp` travels as an `int64` of epoch millis**, not a seconds+nanos submessage | the submessage costs a nested length-delimited frame per timestamp for precision nobody in practice uses | a protoc peer must declare the field `optional int64`. Sub-millisecond precision is lost. Asserted byte-for-byte in `protogen-interop` |
+| **Map entry order is insertion order** | `LinkedHashMap`, so output is deterministic | protoc's order is unspecified, so bytes may differ for multi-entry maps. Both sides parse either |
+| **Unknown enum values become `UNRECOGNIZED`** and are dropped on re-encode | keeping the raw number needs a second component per enum field | protoc round-trips them. Do not use protogen for a relay that must preserve enum values it does not know |
+| **Unknown fields are dropped** unless `preserveUnknownFields` is on | the extra component shows up in every constructor, `equals` and `toString` | turn the flag on for relays |
+
+### Known limitations
+
+- **Deep nesting overflows the stack.** Parsing recurses one Java frame per nesting level, with no depth
+  limit; roughly 20 000 levels overflows. `protobuf-java` caps recursion at 100 and rejects beyond it.
+  This is fine for schemas you control and **not** fine for untrusted input — if you parse bytes from
+  outside your trust boundary, don't use protogen for it. Removing the recursion means a two-phase
+  span-scan-then-build parser, which is a redesign rather than a patch.
+- **`protoSize()` is recomputed, not memoised** — a record has nowhere to cache. Free when a message is
+  serialized once, up to 2.1× when the same deep instance is serialized repeatedly. See
+  [BENCHMARKS.md](BENCHMARKS.md).
+- **Imports are not enforced.** The linker builds one symbol table over every file it is given, so a file
+  can reference a type from a file it never imported. `protoc` rejects that.
+
+### Not supported, by design
+
+| | Why |
+|---|---|
+| **Extensions** (`extend`, and custom options beyond being recorded) | extensions are inherently open and dynamic; supporting them means an extension registry, which is exactly the shared runtime protogen exists to remove. `extensions` **ranges** are parsed so a proto2 schema declaring them still compiles |
+| **Groups** | the deprecated proto2 nested encoding. Rejected with a hint to use a nested message |
+| **Services / gRPC** | protogen generates models, not transports |
+| **JSON mapping** | needs a JSON library or a hand-rolled one in *generated* code; out of scope for a wire-format generator |
+| **Well-known types other than `Timestamp`** | `Any` and `Struct` need dynamic typing; `Duration`, `FieldMask` and friends would be easy but nobody has needed them |
+| **Editions (2023/2024)** | watching, not implementing |
+
+Anything in this table is **rejected with a `file:line:col` diagnostic**, never silently mis-generated.
 
 ## Modules
 
