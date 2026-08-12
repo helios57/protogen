@@ -70,7 +70,40 @@ public enum Feature {
     /** The immutable list view a record's repeated component is normalised to. */
     LIST_VIEW,
     /** The list of nested sizes an encode computes once and the write consumes. */
-    SIZES;
+    SIZES,
+
+    /** {@code google.protobuf.Timestamp}, as {@link java.time.Instant}. */
+    WK_TIMESTAMP,
+    /** {@code google.protobuf.Duration}, as {@link java.time.Duration}. */
+    WK_DURATION,
+    /** {@code google.protobuf.DoubleValue}, as a nullable {@code Double}. */
+    WK_DOUBLE_VALUE,
+    /** {@code google.protobuf.FloatValue}, as a nullable {@code Float}. */
+    WK_FLOAT_VALUE,
+    /** {@code google.protobuf.Int64Value}, as a nullable {@code Long}. */
+    WK_INT64_VALUE,
+    /** {@code google.protobuf.UInt64Value}, as a nullable {@code Long}. */
+    WK_UINT64_VALUE,
+    /** {@code google.protobuf.Int32Value}, as a nullable {@code Integer}. */
+    WK_INT32_VALUE,
+    /** {@code google.protobuf.UInt32Value}, as a nullable {@code Integer}. */
+    WK_UINT32_VALUE,
+    /** {@code google.protobuf.BoolValue}, as a nullable {@code Boolean}. */
+    WK_BOOL_VALUE,
+    /** {@code google.protobuf.StringValue}, as a nullable {@code String}. */
+    WK_STRING_VALUE,
+    /** {@code google.protobuf.BytesValue}, as a nullable {@code byte[]}. */
+    WK_BYTES_VALUE;
+
+    /**
+     * The helper set for a well-known type.
+     *
+     * @param type the mapped type
+     * @return the feature that emits its codec
+     */
+    public static Feature wellKnown(io.github.helios57.protogen.compiler.model.WellKnown type) {
+        return valueOf("WK_" + type.name());
+    }
 
     /**
      * The helpers this one is implemented in terms of.
@@ -161,10 +194,21 @@ public enum Feature {
                         ? Feature.R_LIMIT
                         : Feature.R_SLICE);
             }
-            case TIMESTAMP -> {
-                // encoded as an int64 of epoch milliseconds
-                used.add(Feature.W_VARINT64);
-                used.add(Feature.S_VARINT64);
+            case WELL_KNOWN -> {
+                // a length-delimited submessage, exactly as protoc encodes it
+                used.add(Feature.W_UVARINT32);
+                used.add(Feature.S_UVARINT32);
+                used.add(Feature.R_LIMIT);
+                used.add(Feature.SIZES);
+                used.add(Feature.wellKnown(field.wellKnown()));
+                if (field.wellKnown().isWrapper()) {
+                    collect(field.wellKnown().wrapped(), used);
+                } else {
+                    used.add(Feature.W_VARINT64);
+                    used.add(Feature.S_VARINT64);
+                    used.add(Feature.W_VARINT32);
+                    used.add(Feature.S_VARINT32);
+                }
             }
             case MAP -> {
                 used.add(Feature.W_UVARINT32);
@@ -243,8 +287,8 @@ public enum Feature {
         if (!field.repeated()) {
             return false;
         }
+        // a well-known type is a submessage, and submessages are never packed
         boolean packable = field.kind() == Defs.Kind.ENUM
-                || field.kind() == Defs.Kind.TIMESTAMP
                 || (field.kind() == Defs.Kind.SCALAR && field.scalar().packable());
         if (!packable) {
             return false;

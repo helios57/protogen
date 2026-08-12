@@ -1,5 +1,8 @@
 package io.github.helios57.protogen.compiler.gen;
 
+import io.github.helios57.protogen.compiler.model.ScalarType;
+import io.github.helios57.protogen.compiler.model.WellKnown;
+
 import java.util.EnumSet;
 
 /**
@@ -44,6 +47,7 @@ final class CodecEmitter {
         emitMapView(out);
         emitListView(out);
         emitSizePlan(out);
+        emitWellKnown(out);
 
         out.outdent();
         out.line("}");
@@ -947,6 +951,324 @@ final class CodecEmitter {
         out.line("}");
         out.outdent();
         out.line("}");
+    }
+
+
+    /**
+     * The codecs for the well-known types that map onto JDK types.
+     * <p>
+     * Each is a length-delimited submessage on the wire, exactly as {@code protoc} writes it: a
+     * {@code Timestamp} is {@code {int64 seconds = 1; int32 nanos = 2;\}}, a wrapper is
+     * {@code {<value> value = 1;\}}. Only the Java surface differs - the bytes do not - so a peer built
+     * with {@code protoc} needs no special declaration to talk to one of these.
+     * <p>
+     * A field is written only when it differs from its default, which is what proto3 implicit presence
+     * means and what {@code protoc} does; an instant at the epoch is therefore an empty submessage, not an
+     * absent field.
+     */
+    private void emitWellKnown(Java out) {
+        for (WellKnown type : WellKnown.values()) {
+            if (!features.contains(Feature.wellKnown(type))) {
+                continue;
+            }
+            switch (type) {
+                case TIMESTAMP -> emitTimestamp(out);
+                case DURATION -> emitDuration(out);
+                default -> emitWrapper(out, type);
+            }
+        }
+    }
+
+    private void emitTimestamp(Java out) {
+        out.blank();
+        out.javadoc("""
+                The payload size of a Timestamp, without its tag or length prefix.
+
+                @param v the instant
+                @return the number of bytes the seconds and nanos take""");
+        out.line("static int sTimestamp(java.time.Instant v) {");
+        out.indent();
+        out.line("long seconds = v.getEpochSecond();");
+        out.line("int nanos = v.getNano();");
+        out.line("return (seconds != 0L ? 1 + sVarint64(seconds) : 0) + (nanos != 0 ? 1 + sVarint32(nanos) : 0);");
+        out.outdent();
+        out.line("}");
+
+        out.blank();
+        out.javadoc("""
+                Writes a Timestamp payload.
+
+                @param b the target
+                @param p where to start
+                @param v the instant
+                @return the new position""");
+        out.line("static int wTimestamp(byte[] b, int p, java.time.Instant v) {");
+        out.indent();
+        out.line("long seconds = v.getEpochSecond();");
+        out.line("int nanos = v.getNano();");
+        out.line("if (seconds != 0L) {");
+        out.line("    b[p++] = (byte) 8;");
+        out.line("    p = wVarint64(b, p, seconds);");
+        out.line("}");
+        out.line("if (nanos != 0) {");
+        out.line("    b[p++] = (byte) 16;");
+        out.line("    p = wVarint32(b, p, nanos);");
+        out.line("}");
+        out.line("return p;");
+        out.outdent();
+        out.line("}");
+
+        out.blank();
+        out.javadoc("""
+                Reads a Timestamp payload, up to the limit already pushed for it.
+
+                @param r the reader
+                @return the instant
+                @throws IllegalArgumentException if the seconds and nanos do not form one""");
+        out.line("static java.time.Instant rTimestamp(R r) {");
+        out.indent();
+        out.line("long seconds = 0L;");
+        out.line("int nanos = 0;");
+        out.line("int tag;");
+        out.line("while ((tag = r.tag()) != 0) {");
+        out.indent();
+        out.line("switch (tag) {");
+        out.line("    case 8 -> seconds = r.varint64();");
+        out.line("    case 16 -> nanos = (int) r.varint64();");
+        out.line("    default -> r.skip(tag);");
+        out.line("}");
+        out.outdent();
+        out.line("}");
+        out.line("try {");
+        out.line("    return java.time.Instant.ofEpochSecond(seconds, nanos);");
+        out.line("} catch (RuntimeException e) {");
+        out.line("    throw new IllegalArgumentException(\"malformed protobuf input: not a Timestamp: \"");
+        out.line("            + seconds + \"s \" + nanos + \"ns\", e);");
+        out.line("}");
+        out.outdent();
+        out.line("}");
+    }
+
+    private void emitDuration(Java out) {
+        out.blank();
+        out.javadoc("""
+                The payload size of a Duration, without its tag or length prefix.
+
+                @param v the duration
+                @return the number of bytes the seconds and nanos take""");
+        out.line("static int sDuration(java.time.Duration v) {");
+        out.indent();
+        out.line("long seconds = durationSeconds(v);");
+        out.line("int nanos = durationNanos(v);");
+        out.line("return (seconds != 0L ? 1 + sVarint64(seconds) : 0) + (nanos != 0 ? 1 + sVarint32(nanos) : 0);");
+        out.outdent();
+        out.line("}");
+
+        out.blank();
+        out.javadoc("""
+                Writes a Duration payload.
+
+                @param b the target
+                @param p where to start
+                @param v the duration
+                @return the new position""");
+        out.line("static int wDuration(byte[] b, int p, java.time.Duration v) {");
+        out.indent();
+        out.line("long seconds = durationSeconds(v);");
+        out.line("int nanos = durationNanos(v);");
+        out.line("if (seconds != 0L) {");
+        out.line("    b[p++] = (byte) 8;");
+        out.line("    p = wVarint64(b, p, seconds);");
+        out.line("}");
+        out.line("if (nanos != 0) {");
+        out.line("    b[p++] = (byte) 16;");
+        out.line("    p = wVarint32(b, p, nanos);");
+        out.line("}");
+        out.line("return p;");
+        out.outdent();
+        out.line("}");
+
+        out.blank();
+        out.javadoc("""
+                Reads a Duration payload, up to the limit already pushed for it.
+
+                @param r the reader
+                @return the duration""");
+        out.line("static java.time.Duration rDuration(R r) {");
+        out.indent();
+        out.line("long seconds = 0L;");
+        out.line("int nanos = 0;");
+        out.line("int tag;");
+        out.line("while ((tag = r.tag()) != 0) {");
+        out.indent();
+        out.line("switch (tag) {");
+        out.line("    case 8 -> seconds = r.varint64();");
+        out.line("    case 16 -> nanos = (int) r.varint64();");
+        out.line("    default -> r.skip(tag);");
+        out.line("}");
+        out.outdent();
+        out.line("}");
+        out.line("// ofSeconds normalises a negative nano adjustment, which is how protobuf signs a duration");
+        out.line("return java.time.Duration.ofSeconds(seconds, nanos);");
+        out.outdent();
+        out.line("}");
+
+        out.blank();
+        out.javadoc("""
+                The seconds of a Duration, as protobuf signs them.
+
+                <p>{@code java.time} always keeps the nanos positive and floors the seconds, so -0.5s is
+                -1s +500000000ns. protobuf gives both parts the same sign instead: 0s -500000000ns.
+
+                @param v the duration
+                @return the seconds part""");
+        out.line("static long durationSeconds(java.time.Duration v) {");
+        out.indent();
+        out.line("long seconds = v.getSeconds();");
+        out.line("return seconds < 0 && v.getNano() > 0 ? seconds + 1 : seconds;");
+        out.outdent();
+        out.line("}");
+
+        out.blank();
+        out.javadoc("""
+                The nanos of a Duration, as protobuf signs them.
+
+                @param v the duration
+                @return the nanos part, negative when the duration is""");
+        out.line("static int durationNanos(java.time.Duration v) {");
+        out.indent();
+        out.line("int nanos = v.getNano();");
+        out.line("return v.getSeconds() < 0 && nanos > 0 ? nanos - 1_000_000_000 : nanos;");
+        out.outdent();
+        out.line("}");
+    }
+
+    /**
+     * A wrapper's codec: one optional field, numbered 1.
+     * <p>
+     * The wrapper exists so that a scalar can be absent, so the Java surface is the nullable value itself
+     * and absence is the field not being written at all. A wrapper carrying the scalar's own default is a
+     * present but empty submessage, which is exactly what {@code protoc} produces.
+     */
+    private void emitWrapper(Java out, WellKnown type) {
+        String java = type.javaType();
+        String name = wrapperSuffix(type);
+        ScalarType scalar = type.wrapped();
+        int tag = 8 | scalar.wireType().code();
+
+        out.blank();
+        out.javadoc(("The payload size of a %s, without its tag or length prefix.\n\n"
+                + "@param v the value\n@return the number of bytes it takes").formatted(type.protoName()));
+        out.line("static int s" + name + "(" + java + " v) {");
+        out.indent();
+        out.line("return " + wrapperIsDefault(scalar, "v") + " ? 0 : 1 + " + wrapperSize(scalar, "v") + ";");
+        out.outdent();
+        out.line("}");
+
+        out.blank();
+        out.javadoc(("Writes a %s payload.\n\n@param b the target\n@param p where to start\n"
+                + "@param v the value\n@return the new position").formatted(type.protoName()));
+        out.line("static int w" + name + "(byte[] b, int p, " + java + " v) {");
+        out.indent();
+        out.line("if (" + wrapperIsDefault(scalar, "v") + ") {");
+        out.line("    return p;");
+        out.line("}");
+        out.line("b[p++] = (byte) " + tag + ";");
+        out.line("return " + wrapperWrite(scalar, "v") + ";");
+        out.outdent();
+        out.line("}");
+
+        out.blank();
+        out.javadoc(("Reads a %s payload, up to the limit already pushed for it.\n\n"
+                + "@param r the reader\n@return the value, which is the scalar's default when the "
+                + "submessage is empty").formatted(type.protoName()));
+        out.line("static " + java + " r" + name + "(R r) {");
+        out.indent();
+        out.line(java + " value = " + wrapperDefault(scalar) + ";");
+        out.line("int tag;");
+        out.line("while ((tag = r.tag()) != 0) {");
+        out.indent();
+        out.line("if (tag == " + tag + ") {");
+        out.line("    value = " + wrapperRead(scalar) + ";");
+        out.line("} else {");
+        out.line("    r.skip(tag);");
+        out.line("}");
+        out.outdent();
+        out.line("}");
+        out.line("return value;");
+        out.outdent();
+        out.line("}");
+    }
+
+    /** {@code google.protobuf.StringValue} names its helpers {@code sStringValue} and so on. */
+    static String wrapperSuffix(WellKnown type) {
+        String name = type.protoName();
+        return name.substring(name.lastIndexOf('.') + 1);
+    }
+
+    private static String wrapperIsDefault(ScalarType scalar, String v) {
+        return switch (scalar) {
+            case STRING -> v + ".isEmpty()";
+            case BYTES -> v + ".length == 0";
+            case BOOL -> "!" + v;
+            case DOUBLE -> "Double.doubleToRawLongBits(" + v + ") == 0L";
+            case FLOAT -> "Float.floatToRawIntBits(" + v + ") == 0";
+            case INT64, UINT64, SINT64, FIXED64, SFIXED64 -> v + " == 0L";
+            default -> v + " == 0";
+        };
+    }
+
+    private static String wrapperSize(ScalarType scalar, String v) {
+        return switch (scalar) {
+            case DOUBLE, FIXED64, SFIXED64 -> "8";
+            case FLOAT, FIXED32, SFIXED32 -> "4";
+            case INT32 -> "sVarint32(" + v + ")";
+            case UINT32 -> "sUVarint32(" + v + ")";
+            case INT64, UINT64 -> "sVarint64(" + v + ")";
+            case BOOL -> "1";
+            case STRING -> "sString(" + v + ")";
+            case BYTES -> "sBytes(" + v + ")";
+            default -> throw new IllegalStateException("no wrapper carries " + scalar);
+        };
+    }
+
+    private static String wrapperWrite(ScalarType scalar, String v) {
+        return switch (scalar) {
+            case DOUBLE -> "wFixed64(b, p, Double.doubleToRawLongBits(" + v + "))";
+            case FLOAT -> "wFixed32(b, p, Float.floatToRawIntBits(" + v + "))";
+            case INT32 -> "wVarint32(b, p, " + v + ")";
+            case UINT32 -> "wUVarint32(b, p, " + v + ")";
+            case INT64, UINT64 -> "wVarint64(b, p, " + v + ")";
+            case BOOL -> "wUVarint32(b, p, " + v + " ? 1 : 0)";
+            case STRING -> "wString(b, p, " + v + ")";
+            case BYTES -> "wBytes(b, p, " + v + ")";
+            default -> throw new IllegalStateException("no wrapper carries " + scalar);
+        };
+    }
+
+    private static String wrapperRead(ScalarType scalar) {
+        return switch (scalar) {
+            case DOUBLE -> "Double.longBitsToDouble(r.fixed64())";
+            case FLOAT -> "Float.intBitsToFloat(r.fixed32())";
+            case INT32, UINT32 -> "r.uvarint32()";
+            case INT64, UINT64 -> "r.varint64()";
+            case BOOL -> "r.bool()";
+            case STRING -> "r.string()";
+            case BYTES -> "r.bytes()";
+            default -> throw new IllegalStateException("no wrapper carries " + scalar);
+        };
+    }
+
+    private static String wrapperDefault(ScalarType scalar) {
+        return switch (scalar) {
+            case STRING -> "\"\"";
+            case BYTES -> "new byte[0]";
+            case BOOL -> "false";
+            case DOUBLE -> "0.0D";
+            case FLOAT -> "0.0F";
+            case INT64, UINT64 -> "0L";
+            default -> "0";
+        };
     }
 
     /**

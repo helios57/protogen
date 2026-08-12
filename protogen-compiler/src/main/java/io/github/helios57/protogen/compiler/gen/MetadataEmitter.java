@@ -158,7 +158,7 @@ final class MetadataEmitter {
         return switch (f.kind()) {
             case SCALAR -> f.scalar().protoName();
             case ENUM, MESSAGE -> f.resolved().fullName();
-            case TIMESTAMP -> "google.protobuf.Timestamp";
+            case WELL_KNOWN -> f.wellKnown().protoName();
             case MAP -> "map<" + describeType(f.mapKey()) + ", " + describeType(f.mapValue()) + ">";
         };
     }

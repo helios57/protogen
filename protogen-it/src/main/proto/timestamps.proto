@@ -8,12 +8,9 @@ option java_package = "protogen.it.model";
 import "google/protobuf/timestamp.proto";
 
 /**
- * Timestamp fields surface as java.time.Instant.
- *
- * IMPORTANT: protogen encodes them as an int64 of epoch milliseconds, NOT as the standard
- * seconds+nanos submessage. A peer built with protoc must therefore declare the field as
- * `optional int64` - optional because a Timestamp field has message presence, so the value must
- * still be transmitted when it is zero. Sub-millisecond precision is not carried.
+ * Timestamp fields surface as java.time.Instant, and travel exactly as protoc writes them: a
+ * submessage of {int64 seconds = 1; int32 nanos = 2;}. The import is not needed - protogen knows the
+ * well-known types - but it is written here because protoc needs it, and both sides compile this file.
  */
 message EventV1 {
   // @Example event-1

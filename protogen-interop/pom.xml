@@ -68,10 +68,9 @@
         <plugins>
             <!--
               Derive the reference schemas from the shared ones instead of duplicating them, so the two
-              sides can never drift apart. Two rewrites are applied:
-                1. java_package, so protoc's classes do not collide with protogen's
-                2. google.protobuf.Timestamp -> int64, which is exactly the encoding protogen uses;
-                   the differential test then proves that equivalence rather than assuming it
+              sides can never drift apart. Only java_package is rewritten, so protoc's classes do not
+              collide with protogen's - everything else, including the well-known types, is compiled from
+              the very same text by both sides.
             -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -94,20 +93,6 @@
                                                           replace="protogen.it.official"/>
                                             <replaceregex pattern="com\.java\.proto\.model\.proto"
                                                           replace="com.java.proto.official"/>
-                                            <replaceregex pattern="^\s*import\s+&quot;google/protobuf/timestamp\.proto&quot;;\s*$"
-                                                          replace=""/>
-                                            <!--
-                                              A Timestamp field has message presence, so its faithful
-                                              int64 equivalent is `optional int64`: both must transmit
-                                              the value even when it is zero. Order matters - the
-                                              already-labelled forms are rewritten first.
-                                            -->
-                                            <replaceregex pattern="repeated google\.protobuf\.Timestamp"
-                                                          replace="repeated int64"/>
-                                            <replaceregex pattern="optional google\.protobuf\.Timestamp"
-                                                          replace="optional int64"/>
-                                            <replaceregex pattern="google\.protobuf\.Timestamp"
-                                                          replace="optional int64"/>
                                         </tokenfilter>
                                     </filterchain>
                                 </copy>

@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package protogen.it;
+
+option java_multiple_files = true;
+option java_package = "protogen.it.model";
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/wrappers.proto";
+import "google/protobuf/any.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/struct.proto";
+
+/**
+ * The well-known types, which need no import as far as protogen is concerned - the imports above are
+ * here because protoc compiles this same file for the differential suite.
+ *
+ * The nine wrappers exist to make a scalar absent-able, so each surfaces as the nullable value itself
+ * rather than as a one-field message.
+ */
+message WellKnownV1 {
+
+  // A length of time, as java.time.Duration.
+  google.protobuf.Duration took = 1;
+
+  google.protobuf.StringValue note = 2;
+  google.protobuf.Int32Value attempts = 3;
+  google.protobuf.Int64Value bytesRead = 4;
+  google.protobuf.BoolValue verified = 5;
+  google.protobuf.DoubleValue ratio = 6;
+  google.protobuf.FloatValue weight = 7;
+  google.protobuf.UInt32Value port = 8;
+  google.protobuf.UInt64Value offset = 9;
+  google.protobuf.BytesValue digest = 10;
+
+  // No JDK counterpart, so these are generated as records from the bundled definitions.
+  google.protobuf.Any payload = 11;
+  google.protobuf.Empty nothing = 12;
+  google.protobuf.FieldMask updateMask = 13;
+  google.protobuf.Struct attributes = 14;
+
+  repeated google.protobuf.Duration backoff = 15;
+  repeated google.protobuf.StringValue tags = 16;
+}

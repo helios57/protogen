@@ -154,10 +154,15 @@ class SchemaMetadataTest {
     }
 
     @Test
-    void timestampFieldsAreIdentifiableAsSuch() throws IOException {
+    void wellKnownFieldsAreIdentifiableAsSuch() throws IOException {
         assertThat(read("timestamps.json"))
-                .contains("\"kind\": \"timestamp\"")
+                .contains("\"kind\": \"well_known\"")
                 .contains("\"type\": \"google.protobuf.Timestamp\"");
+        assertThat(read("wellknown.json"))
+                .contains("\"type\": \"google.protobuf.Duration\"")
+                .contains("\"type\": \"google.protobuf.StringValue\"")
+                // the ones with no JDK counterpart are ordinary message references
+                .contains("\"type\": \"google.protobuf.Struct\"");
     }
 
     @Test

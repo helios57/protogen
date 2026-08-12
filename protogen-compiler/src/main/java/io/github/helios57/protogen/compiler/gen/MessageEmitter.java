@@ -513,6 +513,9 @@ final class MessageEmitter {
     }
 
     private static boolean isBytes(Defs.FieldDef f) {
+        if (f.kind() == Defs.Kind.WELL_KNOWN) {
+            return f.wellKnown() == io.github.helios57.protogen.compiler.model.WellKnown.BYTES_VALUE;
+        }
         return f.kind() == Defs.Kind.SCALAR && f.scalar() == ScalarType.BYTES;
     }
 
@@ -731,7 +734,7 @@ final class MessageEmitter {
             out.line("switch (" + locals.entryTag + ") {");
             out.indent();
             out.line("case " + Types.tag(f.mapKey()) + " -> " + locals.key + " = " + readExpr(f.mapKey()) + ";");
-            if (f.mapValue().kind() == Defs.Kind.MESSAGE) {
+            if (submessage(f.mapValue())) {
                 out.line("case " + Types.tag(f.mapValue()) + " -> {");
                 out.indent();
                 emitReadMessage(out, locals.value + " = ", f.mapValue(), "", locals.valueLimit);
@@ -779,7 +782,7 @@ final class MessageEmitter {
                 out.line("case " + Types.writtenTag(f) + " -> {");
                 out.indent();
                 emitLazyList(out, n);
-                if (f.kind() == Defs.Kind.MESSAGE) {
+                if (submessage(f)) {
                     emitReadMessage(out, n + ".add(", f, ")");
                 } else {
                     out.line(n + ".add(" + readExpr(f) + ");");
@@ -791,7 +794,7 @@ final class MessageEmitter {
         }
 
         List<String> siblings = oneofSiblings(f);
-        if (f.kind() == Defs.Kind.MESSAGE) {
+        if (submessage(f)) {
             out.line("case " + Types.writtenTag(f) + " -> {");
             out.indent();
             emitReadMessage(out, n + " = ", f);
@@ -830,6 +833,12 @@ final class MessageEmitter {
      */
     private void emitReadMessage(Java out, String prefix, Defs.FieldDef f, String suffix, String limit) {
         String r = locals.reader;
+        if (f.kind() == Defs.Kind.WELL_KNOWN) {
+            out.line("int " + limit + " = " + r + ".pushLimit(" + r + ".uvarint32());");
+            out.line(prefix + "ProtoWire.r" + wellKnownSuffix(f) + "(" + r + ")" + suffix + ";");
+            out.line(r + ".popLimit(" + limit + ");");
+            return;
+        }
         String type = Types.javaName(f.resolved(), javaPackage);
         if (Types.inPackage(f.resolved(), javaPackage)) {
             out.line("int " + limit + " = " + r + ".pushLimit(" + r + ".uvarint32());");
@@ -881,8 +890,8 @@ final class MessageEmitter {
                 case BYTES -> r + ".bytes()";
             };
             case ENUM -> Types.javaName(f.resolved(), javaPackage) + ".forNumber(" + r + ".uvarint32())";
-            case TIMESTAMP -> "java.time.Instant.ofEpochMilli(" + r + ".varint64())";
-            case MESSAGE, MAP -> throw new IllegalStateException("handled separately");
+
+            case MESSAGE, MAP, WELL_KNOWN -> throw new IllegalStateException("handled separately");
         };
     }
 
@@ -895,7 +904,18 @@ final class MessageEmitter {
      * in front of it.
      */
     private static boolean plans(List<Defs.FieldDef> fields) {
-        return fields.stream().anyMatch(f -> f.kind() == Defs.Kind.MESSAGE || f.kind() == Defs.Kind.MAP);
+        return fields.stream().anyMatch(f -> submessage(f) || f.kind() == Defs.Kind.MAP);
+    }
+
+    /**
+     * Whether the field is a length-delimited submessage on the wire.
+     * <p>
+     * A well-known type is one too - {@code Timestamp} is {@code {seconds, nanos\}} exactly as protoc
+     * writes it. The only difference is where its codec lives: a declared message carries its own, a
+     * well-known one is handled by {@code ProtoWire}, since there is no generated record to put it on.
+     */
+    private static boolean submessage(Defs.FieldDef f) {
+        return f.kind() == Defs.Kind.MESSAGE || f.kind() == Defs.Kind.WELL_KNOWN;
     }
 
     private void emitProtoSize(Java out, List<Defs.FieldDef> fields) {
@@ -938,6 +958,7 @@ final class MessageEmitter {
      */
     private boolean handsDownPlan(Defs.FieldDef f, String plan) {
         return plan != null
+                && f.kind() == Defs.Kind.MESSAGE
                 && Types.inPackage(f.resolved(), javaPackage)
                 && f.resolved() instanceof Defs.MessageDef m
                 && plans(m.fields());
@@ -945,7 +966,16 @@ final class MessageEmitter {
 
     /** The size of a submessage, measured into the plan when there is one and it can be handed down. */
     private String nestedSizeExpr(Defs.FieldDef f, String value, String plan) {
+        if (f.kind() == Defs.Kind.WELL_KNOWN) {
+            return "ProtoWire.s" + wellKnownSuffix(f) + "(" + value + ")";
+        }
         return value + ".protoSize(" + (handsDownPlan(f, plan) ? plan : "") + ")";
+    }
+
+    /** {@code google.protobuf.Timestamp} has its codec at {@code ProtoWire.sTimestamp} and friends. */
+    private static String wellKnownSuffix(Defs.FieldDef f) {
+        String name = f.wellKnown().protoName();
+        return name.substring(name.lastIndexOf('.') + 1);
     }
 
     private void emitSizeFor(Java out, Defs.FieldDef f, String plan) {
@@ -982,7 +1012,7 @@ final class MessageEmitter {
                         + locals.payload + ";");
                 out.outdent();
                 out.line("}");
-            } else if (f.kind() == Defs.Kind.MESSAGE) {
+            } else if (submessage(f)) {
                 emitElementLoop(out, f, n);
                 out.indent();
                 emitNestedSize(out, f, locals.element, plan);
@@ -998,7 +1028,7 @@ final class MessageEmitter {
             return;
         }
 
-        if (f.kind() == Defs.Kind.MESSAGE) {
+        if (submessage(f)) {
             out.line("if (" + n + " != null) {");
             out.indent();
             emitNestedSize(out, f, n, plan);
@@ -1022,7 +1052,7 @@ final class MessageEmitter {
      */
     private void emitNestedSize(Java out, Defs.FieldDef f, String value, String plan) {
         if (plan == null) {
-            out.line("int " + locals.nested + " = " + value + ".protoSize();");
+            out.line("int " + locals.nested + " = " + nestedSizeExpr(f, value, null) + ";");
             return;
         }
         out.line("int " + locals.slot + " = " + plan + ".reserve();");
@@ -1062,7 +1092,7 @@ final class MessageEmitter {
         String keySize = Types.tagSize(Types.tag(f.mapKey())) + " + "
                 + sizeExpr(f.mapKey(), locals.entry + ".getKey()");
         int valueTagSize = Types.tagSize(Types.tag(f.mapValue()));
-        boolean messageValue = f.mapValue().kind() == Defs.Kind.MESSAGE;
+        boolean messageValue = submessage(f.mapValue());
         if (plan != null) {
             // the entry's own length prefix comes first on the wire, so its slot is taken first
             out.line("int " + locals.slot + " = " + plan + ".reserve();");
@@ -1109,7 +1139,7 @@ final class MessageEmitter {
                 default -> n + " != 0";
             };
             case ENUM -> n + ".number() != 0";
-            case TIMESTAMP, MESSAGE -> n + " != null";
+            case MESSAGE, WELL_KNOWN -> n + " != null";
             case MAP -> "!" + n + ".isEmpty()";
         };
     }
@@ -1129,8 +1159,7 @@ final class MessageEmitter {
                 case BYTES -> "ProtoWire.sBytes(" + v + ")";
             };
             case ENUM -> "ProtoWire.sVarint32(" + v + ".number())";
-            case TIMESTAMP -> "ProtoWire.sVarint64(" + v + ".toEpochMilli())";
-            case MESSAGE, MAP -> throw new IllegalStateException("handled separately");
+            case MESSAGE, MAP, WELL_KNOWN -> throw new IllegalStateException("handled separately");
         };
     }
 
@@ -1198,7 +1227,7 @@ final class MessageEmitter {
             emitTagWrite(out, Types.writtenTag(f));
             if (plan != null) {
                 out.line("int " + locals.entrySize + " = " + plan + ".next();");
-                if (f.mapValue().kind() == Defs.Kind.MESSAGE) {
+                if (submessage(f.mapValue())) {
                     out.line("int " + locals.valueSize + " = " + plan + ".next();");
                 }
             } else {
@@ -1209,7 +1238,7 @@ final class MessageEmitter {
             emitTagWrite(out, Types.tag(f.mapKey()));
             emitValueWrite(out, f.mapKey(), locals.entry + ".getKey()");
             emitTagWrite(out, Types.tag(f.mapValue()));
-            if (f.mapValue().kind() == Defs.Kind.MESSAGE) {
+            if (submessage(f.mapValue())) {
                 out.line(locals.offset + " = ProtoWire.wUVarint32(" + locals.target + ", " + locals.offset
                         + ", " + locals.valueSize + ");");
                 out.line(locals.offset + " = " + nestedWriteExpr(f.mapValue(),
@@ -1244,7 +1273,7 @@ final class MessageEmitter {
                 out.line("}");
                 out.outdent();
                 out.line("}");
-            } else if (f.kind() == Defs.Kind.MESSAGE) {
+            } else if (submessage(f)) {
                 emitElementLoop(out, f, n);
                 out.indent();
                 emitTagWrite(out, Types.writtenTag(f));
@@ -1262,7 +1291,7 @@ final class MessageEmitter {
             return;
         }
 
-        if (f.kind() == Defs.Kind.MESSAGE) {
+        if (submessage(f)) {
             out.line("if (" + n + " != null) {");
             out.indent();
             emitTagWrite(out, Types.writtenTag(f));
@@ -1282,7 +1311,7 @@ final class MessageEmitter {
 
     /** Writes a submessage's length prefix, from the plan when there is one, and then the message. */
     private void emitNestedWrite(Java out, Defs.FieldDef f, String value, String plan) {
-        String length = plan == null ? value + ".protoSize()" : plan + ".next()";
+        String length = plan == null ? nestedSizeExpr(f, value, null) : plan + ".next()";
         out.line(locals.offset + " = ProtoWire.wUVarint32(" + locals.target + ", " + locals.offset
                 + ", " + length + ");");
         out.line(locals.offset + " = " + nestedWriteExpr(f, value, plan) + ";");
@@ -1290,6 +1319,10 @@ final class MessageEmitter {
 
     /** A message in this package reads on from the same plan; one from another package makes its own. */
     private String nestedWriteExpr(Defs.FieldDef f, String value, String plan) {
+        if (f.kind() == Defs.Kind.WELL_KNOWN) {
+            return "ProtoWire.w" + wellKnownSuffix(f) + "(" + locals.target + ", " + locals.offset
+                    + ", " + value + ")";
+        }
         return value + ".writeTo(" + locals.target + ", " + locals.offset
                 + (handsDownPlan(f, plan) ? ", " + plan : "") + ")";
     }
@@ -1329,9 +1362,7 @@ final class MessageEmitter {
                 }
             }
             case ENUM -> out.line(o + " = ProtoWire.wVarint32(" + t + ", " + o + ", " + v + ".number());");
-            case TIMESTAMP -> out.line(o + " = ProtoWire.wVarint64(" + t + ", " + o + ", "
-                    + v + ".toEpochMilli());");
-            case MESSAGE, MAP -> throw new IllegalStateException("handled separately");
+            case MESSAGE, MAP, WELL_KNOWN -> throw new IllegalStateException("handled separately");
         }
     }
 

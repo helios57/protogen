@@ -122,8 +122,43 @@ class LinkerTest {
                 message M { google.protobuf.Timestamp at = 1; }
                 """);
 
-        assertThat(schema.files().get(0).messages().get(0).fields().get(0).kind())
-                .isEqualTo(Defs.Kind.TIMESTAMP);
+        Defs.FieldDef field = schema.files().get(0).messages().get(0).fields().get(0);
+        assertThat(field.kind()).isEqualTo(Defs.Kind.WELL_KNOWN);
+        assertThat(field.wellKnown()).isEqualTo(io.github.helios57.protogen.compiler.model.WellKnown.TIMESTAMP);
+    }
+
+    @Test
+    void aWellKnownTypeNeedsNoImport() {
+        // their definitions are fixed and public, so protogen knows them without being handed the file
+        Schema schema = link("""
+                syntax = "proto3";
+                package a;
+                message M {
+                  google.protobuf.Timestamp at = 1;
+                  google.protobuf.Duration took = 2;
+                  google.protobuf.StringValue note = 3;
+                }
+                """);
+
+        assertThat(schema.files().get(0).messages().get(0).fields())
+                .extracting(Defs.FieldDef::wellKnown)
+                .containsExactly(io.github.helios57.protogen.compiler.model.WellKnown.TIMESTAMP,
+                        io.github.helios57.protogen.compiler.model.WellKnown.DURATION,
+                        io.github.helios57.protogen.compiler.model.WellKnown.STRING_VALUE);
+    }
+
+    @Test
+    void aTypeOfTheUsersOwnIsNotMistakenForAWellKnownOne() {
+        Schema schema = link("""
+                syntax = "proto3";
+                package a;
+                message Timestamp { int64 whatever = 1; }
+                message M { Timestamp at = 1; }
+                """);
+
+        Defs.FieldDef field = schema.files().get(0).messages().get(1).fields().get(0);
+        assertThat(field.kind()).isEqualTo(Defs.Kind.MESSAGE);
+        assertThat(field.resolved().fullName()).isEqualTo("a.Timestamp");
     }
 
     @Test
@@ -165,15 +200,56 @@ class LinkerTest {
     }
 
     @Test
-    void rejectsUnsupportedWellKnownTypesByName() {
-        assertThatThrownBy(() -> link("""
+    void aWellKnownTypeWithNoJdkCounterpartIsGeneratedFromTheBundledDefinition() {
+        Schema schema = link("""
                 syntax = "proto3";
-                import "google/protobuf/any.proto";
+                package a;
+                option java_package = "x";
                 message M { google.protobuf.Any a = 1; }
-                """))
-                .isInstanceOf(ProtoCompileException.class)
-                .hasMessageContaining("google.protobuf.Any")
-                .hasMessageContaining("only google.protobuf.Timestamp");
+                """);
+
+        // pulled in without an import, and generated into the schema's own java package
+        assertThat(schema.files()).extracting(ProtoFile::fileName).contains("any.proto");
+        Defs.FieldDef field = schema.files().get(schema.files().size() - 1)
+                .messages().get(0).fields().get(0);
+        assertThat(field.kind()).isEqualTo(Defs.Kind.MESSAGE);
+        assertThat(field.resolved().fullName()).isEqualTo("google.protobuf.Any");
+        assertThat(field.resolved().file().javaPackage()).isEqualTo("x");
+    }
+
+    @Test
+    void aBundledDefinitionBringsWhatItNeedsWithIt() {
+        Schema schema = link("""
+                syntax = "proto3";
+                package a;
+                option java_package = "x";
+                message M { google.protobuf.Struct payload = 1; }
+                """);
+
+        // Struct is a map of Value, Value is a oneof over Struct, ListValue and NullValue
+        assertThat(schema.symbols().keySet())
+                .contains("google.protobuf.Struct", "google.protobuf.Value",
+                        "google.protobuf.ListValue", "google.protobuf.NullValue");
+    }
+
+    @Test
+    void aBundledDefinitionIsNotLoadedWhenNothingNamesIt() {
+        Schema schema = link("syntax = \"proto3\";\npackage a;\nmessage M { string s = 1; }\n");
+
+        assertThat(schema.files()).hasSize(1);
+    }
+
+    @Test
+    void aSchemaThatDeclaresItsOwnWinsOverTheBundledOne() {
+        Schema schema = link("""
+                syntax = "proto3";
+                package google.protobuf;
+                message Empty { string mine = 1; }
+                message M { Empty e = 1; }
+                """);
+
+        assertThat(schema.files()).hasSize(1);
+        assertThat(schema.symbols().get("google.protobuf.Empty").file().fileName()).isEqualTo("file0.proto");
     }
 
     @Test

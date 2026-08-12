@@ -4,6 +4,7 @@ import io.github.helios57.protogen.compiler.ProtoCompileException;
 import io.github.helios57.protogen.compiler.model.Defs;
 import io.github.helios57.protogen.compiler.model.ProtoFile;
 import io.github.helios57.protogen.compiler.model.ScalarType;
+import io.github.helios57.protogen.compiler.model.WellKnown;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -26,14 +27,6 @@ public final class Linker {
     public Linker() {
     }
 
-    /** {@code google.protobuf.Timestamp}, mapped to {@link java.time.Instant} rather than generated. */
-    public static final String TIMESTAMP = "google.protobuf.Timestamp";
-
-    private static final List<String> KNOWN_UNSUPPORTED_WELL_KNOWN = List.of(
-            "google.protobuf.Any", "google.protobuf.Duration", "google.protobuf.Struct",
-            "google.protobuf.Value", "google.protobuf.FieldMask", "google.protobuf.Empty",
-            "google.type.Date", "google.type.DateTime", "google.type.TimeOfDay");
-
     private final Map<String, Defs.TypeDef> symbols = new LinkedHashMap<>();
 
     /** Per file, the files whose types it may name: itself, its imports, and their {@code import public}s. */
@@ -47,6 +40,12 @@ public final class Linker {
      * @throws io.github.helios57.protogen.compiler.ProtoCompileException if a reference cannot be resolved
      */
     public Schema link(List<ProtoFile> files) {
+        List<ProtoFile> bundled = WellKnownTypes.requiredBy(files, javaPackageFor(files));
+        if (!bundled.isEmpty()) {
+            List<ProtoFile> all = new java.util.ArrayList<>(bundled);
+            all.addAll(files);
+            files = all;
+        }
         for (ProtoFile file : files) {
             String scope = file.protoPackage();
             for (Defs.MessageDef m : file.messages()) {
@@ -63,6 +62,25 @@ public final class Linker {
             }
         }
         return new Schema(List.copyOf(files), Map.copyOf(symbols));
+    }
+
+    /**
+     * Where the bundled well-known definitions are generated.
+     * <p>
+     * Into the first java package the schema uses, so they land next to the messages that name them
+     * rather than in {@code com.google.protobuf}, which would collide with {@code protobuf-java} for
+     * anyone who has it on the classpath.
+     *
+     * @param files the parsed schema
+     * @return the java package to generate them into
+     */
+    private static String javaPackageFor(List<ProtoFile> files) {
+        for (ProtoFile file : files) {
+            if (!file.javaPackage().isEmpty()) {
+                return file.javaPackage();
+            }
+        }
+        return "";
     }
 
     /**
@@ -139,6 +157,10 @@ public final class Linker {
         String declaredIn = found.file().fileName();
         Set<String> visible = visibleFiles.get(file.fileName());
         if (visible == null || visible.contains(declaredIn)) {
+            return;
+        }
+        // a bundled definition was never imported because it never had to be
+        if (WellKnownTypes.isBundled(declaredIn)) {
             return;
         }
         throw new ProtoCompileException(field.pos(), "type '" + field.typeName() + "' is declared in "
@@ -256,13 +278,12 @@ public final class Linker {
         }
 
         String normalized = typeName.startsWith(".") ? typeName.substring(1) : typeName;
-        if (TIMESTAMP.equals(normalized)) {
-            field.resolveTimestamp();
+        // the well-known types have fixed public definitions, so they need no import to be understood.
+        // only the qualified name maps: an unqualified Timestamp is whatever the schema's own scope says
+        WellKnown wellKnown = WellKnown.byProtoName(normalized);
+        if (wellKnown != null) {
+            field.resolveWellKnown(wellKnown);
             return;
-        }
-        if (KNOWN_UNSUPPORTED_WELL_KNOWN.contains(normalized)) {
-            throw new ProtoCompileException(field.pos(), "well-known type '" + normalized
-                    + "' is not supported; only google.protobuf.Timestamp is, mapped to java.time.Instant");
         }
 
         Defs.TypeDef found = lookup(typeName, scope, file);

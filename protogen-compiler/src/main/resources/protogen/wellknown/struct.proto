@@ -1,0 +1,35 @@
+// A well-known type, bundled with protogen so that a schema naming it needs no import.
+// Field numbers and types are those of google/protobuf/struct.proto; the wire encoding is identical.
+syntax = "proto3";
+
+package google.protobuf;
+
+option java_package = "$PACKAGE$";
+option java_multiple_files = true;
+
+// A structure of dynamically typed values, the protobuf equivalent of a JSON object.
+message Struct {
+  map<string, Value> fields = 1;
+}
+
+// One dynamically typed value: exactly one of the six is set.
+message Value {
+  oneof kind {
+    NullValue null_value = 1;
+    double number_value = 2;
+    string string_value = 3;
+    bool bool_value = 4;
+    Struct struct_value = 5;
+    ListValue list_value = 6;
+  }
+}
+
+// A list of dynamically typed values, the protobuf equivalent of a JSON array.
+message ListValue {
+  repeated Value values = 1;
+}
+
+// The null value, which needs a type of its own because a oneof member cannot be untyped.
+enum NullValue {
+  NULL_VALUE = 0;
+}

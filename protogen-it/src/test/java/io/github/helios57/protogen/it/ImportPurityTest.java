@@ -57,7 +57,7 @@ class ImportPurityTest {
         List<String> ownPackages = generatedPackages();
 
         for (Path java : generatedJavaFiles()) {
-            Matcher m = qualified.matcher(Files.readString(java));
+            Matcher m = qualified.matcher(withoutComments(Files.readString(java)));
             while (m.find()) {
                 String pkg = m.group(1);
                 boolean allowed = pkg.startsWith("java.") || pkg.startsWith("javax.")
@@ -71,6 +71,20 @@ class ImportPurityTest {
         assertThat(violations)
                 .as("generated code may name only JDK types and its own generated types")
                 .isEmpty();
+    }
+
+    /**
+     * Strips comments, because the check is about what the code names.
+     * <p>
+     * A javadoc line saying which well-known type a helper encodes is prose about protobuf, not a
+     * reference to anything - and a check that cannot tell the difference would push the generator into
+     * writing worse comments.
+     *
+     * @param source the generated Java
+     * @return the same source with block and line comments blanked out
+     */
+    private static String withoutComments(String source) {
+        return source.replaceAll("(?s)/\\*.*?\\*/", " ").replaceAll("(?m)//.*$", " ");
     }
 
     @Test

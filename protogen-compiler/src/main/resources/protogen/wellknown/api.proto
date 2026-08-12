@@ -1,0 +1,39 @@
+// A well-known type, bundled with protogen so that a schema naming it needs no import.
+// These describe an API surface; a schema rarely names them, but one that does still compiles.
+syntax = "proto3";
+
+package google.protobuf;
+
+import "google/protobuf/source_context.proto";
+import "google/protobuf/type.proto";
+
+option java_package = "$PACKAGE$";
+option java_multiple_files = true;
+
+// A light-weight description of an interface, and the methods it declares.
+message Api {
+  string name = 1;
+  repeated Method methods = 2;
+  repeated Option options = 3;
+  string version = 4;
+  SourceContext source_context = 5;
+  repeated Mixin mixins = 6;
+  Syntax syntax = 7;
+}
+
+// One method of an API.
+message Method {
+  string name = 1;
+  string request_type_url = 2;
+  bool request_streaming = 3;
+  string response_type_url = 4;
+  bool response_streaming = 5;
+  repeated Option options = 6;
+  Syntax syntax = 7;
+}
+
+// An API included into another one.
+message Mixin {
+  string name = 1;
+  string root = 2;
+}

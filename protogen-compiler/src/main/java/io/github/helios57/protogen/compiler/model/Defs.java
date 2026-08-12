@@ -74,10 +74,10 @@ public final class Defs {
         /** A {@code map<K, V>}, encoded as a repeated entry submessage. */
         MAP,
         /**
-         * {@code google.protobuf.Timestamp}, surfaced as {@link java.time.Instant} and encoded as an
-         * {@code int64} of epoch milliseconds.
+         * A {@code google.protobuf} type mapped onto something the JDK already has - {@link WellKnown} -
+         * and encoded exactly as {@code protoc} encodes it.
          */
-        TIMESTAMP
+        WELL_KNOWN
     }
 
     /** A message declaration. */
@@ -449,6 +449,7 @@ public final class Defs {
         private ProtoFile file;
         private Kind kind;
         private ScalarType scalar;
+        private WellKnown wellKnown;
         private TypeDef resolved;
         private FieldDef mapKey;
         private FieldDef mapValue;
@@ -694,9 +695,23 @@ public final class Defs {
             this.scalar = scalar;
         }
 
-        /** Resolves this field to {@code google.protobuf.Timestamp}, surfaced as {@link java.time.Instant}. */
-        public void resolveTimestamp() {
-            this.kind = Kind.TIMESTAMP;
+        /**
+         * Resolves this field to a well-known type that maps onto a JDK type.
+         *
+         * @param wellKnown which one
+         */
+        public void resolveWellKnown(WellKnown wellKnown) {
+            this.kind = Kind.WELL_KNOWN;
+            this.wellKnown = wellKnown;
+        }
+
+        /**
+         * The well-known type this field resolved to.
+         *
+         * @return the mapped type, or {@code null} unless the kind is {@link Kind#WELL_KNOWN}
+         */
+        public WellKnown wellKnown() {
+            return wellKnown;
         }
 
         /**

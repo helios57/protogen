@@ -28,11 +28,19 @@ class InstantTest {
     }
 
     @Test
-    void encodedAsAPlainInt64OfMilliseconds() {
-        EventV1 message = new EventV1("", Instant.ofEpochMilli(1), null, List.of());
+    void encodedAsProtocEncodesIt() {
+        EventV1 message = new EventV1("", Instant.ofEpochSecond(1, 2), null, List.of());
 
-        // field 2, wire type 0 (varint) - not wire type 2, which a Timestamp submessage would use
-        assertThat(message.toByteArray()).containsExactly(0x10, 0x01);
+        // field 2, wire type 2, then {seconds = 1 (field 1), nanos = 2 (field 2)} - protoc's Timestamp
+        assertThat(message.toByteArray()).containsExactly(0x12, 0x04, 0x08, 0x01, 0x10, 0x02);
+    }
+
+    @Test
+    void theEpochIsAnEmptySubmessageRatherThanAnAbsentField() {
+        // both parts are at their default, and proto3 does not write a default - but the field is present
+        EventV1 message = new EventV1("", Instant.EPOCH, null, List.of());
+
+        assertThat(message.toByteArray()).containsExactly(0x12, 0x00);
     }
 
     @ParameterizedTest
@@ -44,13 +52,23 @@ class InstantTest {
     }
 
     @Test
-    void subMillisecondPrecisionIsTruncatedNotCorrupted() {
+    void nanosecondPrecisionSurvives() {
         Instant precise = Instant.ofEpochSecond(1_760_000_000L, 123_456_789);
 
         Instant parsed = EventV1.parseFrom(event(precise).toByteArray()).occurredAt();
 
-        assertThat(parsed).isEqualTo(Instant.ofEpochMilli(precise.toEpochMilli()));
-        assertThat(parsed.getNano()).isEqualTo(123_000_000);
+        assertThat(parsed).isEqualTo(precise);
+        assertThat(parsed.getNano()).isEqualTo(123_456_789);
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = {0L, 1L, -1L, 999_999_999L, -62_135_596_800L, 253_402_300_799L})
+    void secondsAndNanosRoundTripAtTheirBoundaries(long seconds) {
+        for (int nanos : new int[]{0, 1, 999_999_999}) {
+            Instant value = Instant.ofEpochSecond(seconds, nanos);
+
+            assertThat(EventV1.parseFrom(event(value).toByteArray()).occurredAt()).isEqualTo(value);
+        }
     }
 
     @Test
@@ -81,11 +99,12 @@ class InstantTest {
     }
 
     @Test
-    void repeatedTimestampsArePacked() {
-        List<Instant> retries = List.of(Instant.ofEpochMilli(1), Instant.ofEpochMilli(2));
+    void repeatedTimestampsAreNotPackedBecauseTheyAreSubmessages() {
+        List<Instant> retries = List.of(Instant.ofEpochSecond(1), Instant.ofEpochSecond(2));
         EventV1 message = new EventV1("", null, null, retries);
 
-        assertThat(message.protoSize()).isEqualTo(1 + 1 + 2);
+        // one tag and one length prefix each, as for any repeated message field
+        assertThat(message.protoSize()).isEqualTo(2 * (1 + 1 + 2));
         assertThat(EventV1.parseFrom(message.toByteArray()).retryAt()).isEqualTo(retries);
     }
 }

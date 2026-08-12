@@ -20,7 +20,7 @@ final class Types {
         return switch (field.kind()) {
             case SCALAR -> field.scalar().wireType().code();
             case ENUM -> 0;
-            case TIMESTAMP -> 0;
+            case WELL_KNOWN -> 2;
             case MESSAGE, MAP -> 2;
         };
     }
@@ -96,7 +96,7 @@ final class Types {
         return switch (field.kind()) {
             case SCALAR -> field.scalar().javaType();
             case ENUM, MESSAGE -> javaName(field.resolved(), currentPackage);
-            case TIMESTAMP -> "java.time.Instant";
+            case WELL_KNOWN -> field.wellKnown().javaType();
             case MAP -> throw new IllegalStateException();
         };
     }
@@ -106,7 +106,7 @@ final class Types {
         return switch (field.kind()) {
             case SCALAR -> field.scalar().boxedType();
             case ENUM, MESSAGE -> javaName(field.resolved(), currentPackage);
-            case TIMESTAMP -> "java.time.Instant";
+            case WELL_KNOWN -> field.wellKnown().javaType();
             case MAP -> throw new IllegalStateException("nested map");
         };
     }
@@ -121,7 +121,7 @@ final class Types {
             case ENUM -> javaName(field.resolved(), currentPackage) + "."
                     + io.github.helios57.protogen.compiler.model.Names
                     .escape(((Defs.EnumDef) field.resolved()).defaultValue().name());
-            case MESSAGE, TIMESTAMP -> "null";
+            case MESSAGE, WELL_KNOWN -> "null";
             case MAP -> "null";
         };
     }
@@ -140,9 +140,9 @@ final class Types {
         }
         // proto2 required is the one label that guarantees a scalar is there
         if (field.label() == Defs.Label.REQUIRED) {
-            return field.kind() == Defs.Kind.MESSAGE || field.kind() == Defs.Kind.TIMESTAMP;
+            return field.kind() == Defs.Kind.MESSAGE || field.kind() == Defs.Kind.WELL_KNOWN;
         }
-        return field.kind() == Defs.Kind.MESSAGE || field.kind() == Defs.Kind.TIMESTAMP;
+        return field.kind() == Defs.Kind.MESSAGE || field.kind() == Defs.Kind.WELL_KNOWN;
     }
 
     /**

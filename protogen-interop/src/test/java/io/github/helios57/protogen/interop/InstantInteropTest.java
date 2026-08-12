@@ -1,5 +1,6 @@
 package io.github.helios57.protogen.interop;
 
+import com.google.protobuf.Timestamp;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -11,95 +12,111 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * protogen surfaces {@code google.protobuf.Timestamp} as {@link Instant} but puts it on the wire as an
- * {@code int64} of epoch milliseconds.
+ * protogen surfaces {@code google.protobuf.Timestamp} as {@link Instant}, and puts it on the wire exactly
+ * as {@code protoc} does: a submessage of {@code {int64 seconds = 1; int32 nanos = 2;}}.
  * <p>
- * That is a deliberate deviation from the reference encoding, which uses a seconds+nanos submessage. This
- * test pins the contract it creates instead: <strong>a protogen {@code Timestamp} field is byte-identical
- * to a protoc {@code optional int64} field of epoch milliseconds.</strong>
- * <p>
- * {@code optional} is the part that is easy to get wrong. A {@code Timestamp} field has message presence,
- * so an instant at the epoch is a real value and must go on the wire; a bare {@code int64} would treat
- * zero as absent and drop it. The reference schema used here is derived from the shared one by exactly
- * this substitution, so the two can never drift apart.
+ * Both sides compile the very same {@code .proto} text - only {@code java_package} is rewritten - so this
+ * is a comparison of two encoders of one schema, not of two schemas that are believed to correspond.
  */
 class InstantInteropTest {
 
+    private static Timestamp reference(Instant when) {
+        return Timestamp.newBuilder()
+                .setSeconds(when.getEpochSecond())
+                .setNanos(when.getNano())
+                .build();
+    }
+
     @Test
-    void timestampIsByteIdenticalToAnOfficialInt64OfMillis() throws Exception {
-        Instant when = Instant.ofEpochMilli(1_760_000_000_123L);
+    void aTimestampIsByteIdenticalToProtocs() {
+        Instant when = Instant.ofEpochSecond(1_760_000_000L, 123_456_789);
         EventV1 mine = new EventV1("e", when, null, List.of());
         protogen.it.official.EventV1 theirs = protogen.it.official.EventV1.newBuilder()
-                .setEventId("e").setOccurredAt(when.toEpochMilli()).build();
+                .setEventId("e").setOccurredAt(reference(when)).build();
 
         assertThat(mine.toByteArray()).isEqualTo(theirs.toByteArray());
     }
 
     @ParameterizedTest
-    @ValueSource(longs = {0L, 1L, -1L, 1_000L, -1_000L, 253_402_300_799_000L, -62_135_596_800_000L})
-    void everyEpochMillisAgrees(long millis) throws Exception {
-        EventV1 mine = new EventV1("", Instant.ofEpochMilli(millis), null, List.of());
-        protogen.it.official.EventV1 theirs = protogen.it.official.EventV1.newBuilder()
-                .setOccurredAt(millis).build();
+    @ValueSource(longs = {0L, 1L, -1L, 1_000L, -1_000L, 253_402_300_799L, -62_135_596_800L})
+    void everySecondAgrees(long seconds) throws Exception {
+        for (int nanos : new int[]{0, 1, 500_000_000, 999_999_999}) {
+            Instant when = Instant.ofEpochSecond(seconds, nanos);
+            EventV1 mine = new EventV1("", when, null, List.of());
+            protogen.it.official.EventV1 theirs = protogen.it.official.EventV1.newBuilder()
+                    .setOccurredAt(reference(when)).build();
 
-        assertThat(mine.toByteArray()).isEqualTo(theirs.toByteArray());
-        assertThat(protogen.it.official.EventV1.parseFrom(mine.toByteArray()).getOccurredAt())
-                .isEqualTo(millis);
-        assertThat(EventV1.parseFrom(theirs.toByteArray()).occurredAt())
-                .isEqualTo(Instant.ofEpochMilli(millis));
+            assertThat(mine.toByteArray()).as("%ss %sns", seconds, nanos).isEqualTo(theirs.toByteArray());
+            assertThat(protogen.it.official.EventV1.parseFrom(mine.toByteArray()).getOccurredAt())
+                    .isEqualTo(reference(when));
+            assertThat(EventV1.parseFrom(theirs.toByteArray()).occurredAt()).isEqualTo(when);
+        }
     }
 
     @Test
-    void officialInt64DecodesIntoAnInstant() throws Exception {
+    void nanosecondPrecisionCrossesInBothDirections() throws Exception {
+        // the old encoding was epoch millis, which silently dropped this
+        Instant precise = Instant.ofEpochSecond(1_760_000_000L, 999_999_999);
+
+        protogen.it.official.EventV1 theirs = protogen.it.official.EventV1
+                .parseFrom(new EventV1("", precise, null, List.of()).toByteArray());
+
+        assertThat(theirs.getOccurredAt().getNanos()).isEqualTo(999_999_999);
+        assertThat(EventV1.parseFrom(theirs.toByteArray()).occurredAt()).isEqualTo(precise);
+    }
+
+    @Test
+    void protocsTimestampDecodesIntoAnInstant() throws Exception {
         protogen.it.official.EventV1 theirs = protogen.it.official.EventV1.newBuilder()
-                .setEventId("from-protoc").setOccurredAt(42L).build();
+                .setEventId("from-protoc")
+                .setOccurredAt(Timestamp.newBuilder().setSeconds(42).setNanos(7).build())
+                .build();
 
         EventV1 mine = EventV1.parseFrom(theirs.toByteArray());
 
         assertThat(mine.eventId()).isEqualTo("from-protoc");
-        assertThat(mine.occurredAt()).isEqualTo(Instant.ofEpochMilli(42L));
+        assertThat(mine.occurredAt()).isEqualTo(Instant.ofEpochSecond(42, 7));
     }
 
     @Test
-    void unsetTimestampAgreesWithAnUnsetOfficialOptionalInt64() throws Exception {
-        EventV1 mine = new EventV1("e", null, null, List.of());
+    void theEpochIsWrittenBecauseTheFieldHasMessagePresence() {
+        // both parts default, so the payload is empty - but the field itself is there, as protoc has it
+        EventV1 mine = new EventV1("", Instant.EPOCH, null, List.of());
         protogen.it.official.EventV1 theirs = protogen.it.official.EventV1.newBuilder()
-                .setEventId("e").build();
+                .setOccurredAt(Timestamp.getDefaultInstance()).build();
+
+        assertThat(mine.toByteArray()).isEqualTo(theirs.toByteArray()).isNotEmpty();
+    }
+
+    @Test
+    void anAbsentTimestampIsAbsentOnBothSides() {
+        EventV1 mine = new EventV1("x", null, null, List.of());
+        protogen.it.official.EventV1 theirs = protogen.it.official.EventV1.newBuilder()
+                .setEventId("x").build();
 
         assertThat(mine.toByteArray()).isEqualTo(theirs.toByteArray());
     }
 
     @Test
-    void optionalTimestampAtTheEpochIsStillTransmitted() throws Exception {
-        EventV1 mine = new EventV1("", null, Instant.EPOCH, List.of());
+    void anOptionalTimestampAgrees() throws Exception {
+        Instant when = Instant.ofEpochSecond(5, 5);
+        EventV1 mine = new EventV1("", null, when, List.of());
         protogen.it.official.EventV1 theirs = protogen.it.official.EventV1.newBuilder()
-                .setAcknowledgedAt(0L).build();
+                .setAcknowledgedAt(reference(when)).build();
 
         assertThat(mine.toByteArray()).isEqualTo(theirs.toByteArray());
-        assertThat(protogen.it.official.EventV1.parseFrom(mine.toByteArray()).hasAcknowledgedAt()).isTrue();
+        assertThat(EventV1.parseFrom(theirs.toByteArray()).acknowledgedAt()).isEqualTo(when);
     }
 
     @Test
-    void repeatedTimestampsArePackedJustLikeOfficialInt64s() throws Exception {
-        List<Instant> retries = List.of(Instant.ofEpochMilli(1), Instant.ofEpochMilli(2),
-                Instant.ofEpochMilli(1_760_000_000_000L));
+    void repeatedTimestampsAgree() throws Exception {
+        List<Instant> retries = List.of(Instant.ofEpochSecond(1, 1), Instant.EPOCH,
+                Instant.ofEpochSecond(-1, 999_999_999));
         EventV1 mine = new EventV1("", null, null, retries);
-        protogen.it.official.EventV1 theirs = protogen.it.official.EventV1.newBuilder()
-                .addAllRetryAt(retries.stream().map(Instant::toEpochMilli).toList())
-                .build();
+        protogen.it.official.EventV1.Builder theirs = protogen.it.official.EventV1.newBuilder();
+        retries.forEach(when -> theirs.addRetryAt(reference(when)));
 
-        assertThat(mine.toByteArray()).isEqualTo(theirs.toByteArray());
-        assertThat(EventV1.parseFrom(theirs.toByteArray()).retryAt()).isEqualTo(retries);
-    }
-
-    @Test
-    void subMillisecondPrecisionIsLostByDesign() throws Exception {
-        Instant precise = Instant.ofEpochSecond(1_760_000_000L, 123_456_789);
-        EventV1 mine = new EventV1("", precise, null, List.of());
-
-        assertThat(protogen.it.official.EventV1.parseFrom(mine.toByteArray()).getOccurredAt())
-                .isEqualTo(precise.toEpochMilli());
-        assertThat(EventV1.parseFrom(mine.toByteArray()).occurredAt().getNano())
-                .isEqualTo(123_000_000);
+        assertThat(mine.toByteArray()).isEqualTo(theirs.build().toByteArray());
+        assertThat(EventV1.parseFrom(theirs.build().toByteArray()).retryAt()).isEqualTo(retries);
     }
 }
