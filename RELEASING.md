@@ -1,17 +1,48 @@
 # Releasing to Maven Central
 
-Everything in the build is ready: `mvn -Prelease verify` already produces the signed jars, sources and
-javadoc that Central validates. What is left is an account registration and a set of credentials, which
-cannot be scripted because they are tied to your identity.
+Releasing is: **push a tag**. The workflow builds, tests, signs, uploads and publishes; nothing else is
+needed.
 
-Once the four secrets exist, releasing is: **push a tag**.
-
-**Status:** not yet published. Nothing about protogen depends on this — the plugin works fine built from
-source — but Central is what lets other people use it without cloning.
+**Status:** published. `io.github.helios57.protogen` is live on Central, the four secrets are in place and
+`autoPublish` is on, so a tag goes all the way through without a confirmation click.
 
 ---
 
-## One-time setup
+## Releasing
+
+```bash
+# 1. drop the -SNAPSHOT
+mvn -B versions:set -DnewVersion=X.Y.Z -DgenerateBackupPoms=false
+git commit -am "Release X.Y.Z"
+
+# 2. tag it - this is what triggers the workflow
+git tag -a vX.Y.Z -m "protogen X.Y.Z"
+git push origin main vX.Y.Z
+
+# 3. back to snapshots
+mvn -B versions:set -DnewVersion=<next>-SNAPSHOT -DgenerateBackupPoms=false
+git commit -am "Back to snapshot"
+git push
+```
+
+The workflow refuses to publish if the pom version does not match the tag, or if it is a `SNAPSHOT`.
+
+Then write the release notes: add the section to [CHANGELOG.md](CHANGELOG.md) before tagging, and create
+the GitHub release from the tag afterwards.
+
+### Trying it without publishing
+
+Run the workflow manually with **dryRun** ticked
+(<https://github.com/helios57/protogen/actions/workflows/release.yml> → Run workflow). It builds, signs
+and uploads the artifacts as a GitHub artifact without touching Central — worth doing after any change to
+the signing setup, because **a Central deployment cannot be deleted once released**.
+
+---
+
+## The one-time setup, for reference
+
+All of this is done. It is kept because it is the part that cannot be scripted, and because a lost
+machine or a rotated key means doing it again.
 
 ### 1. A Central Portal account, and the `io.github.helios57` namespace
 
@@ -30,9 +61,9 @@ In the portal: **your name → View Account → Generate User Token**. It gives 
 
 Central requires every artifact to be signed, and the public key to be findable on a public keyserver.
 
-**A suitable key already exists on the development machine** — `rsa4096/4A438D5FE3746224`,
-`helios57 <helios157@gmail.com>`, valid to 2046 — and `mvn -Prelease verify` signs every artifact with it
-today. Two things still have to happen, both of which publish or export something and so are left to you:
+The key in use is `rsa4096/4A438D5FE3746224`, `helios57 <helios157@gmail.com>`, valid to 2046. Its public
+half is on `keyserver.ubuntu.com` and its private half is in the `GPG_PRIVATE_KEY` secret. To replace it,
+both halves have to be published and exported again:
 
 ```bash
 # 1. publish the public half; Central looks the key up here, and keyservers do not forget
@@ -72,40 +103,6 @@ is a perfectly valid setup.
 
 ---
 
-## Releasing
-
-```bash
-# 1. drop the -SNAPSHOT
-mvn -B versions:set -DnewVersion=0.1.0 -DgenerateBackupPoms=false
-git commit -am "Release 0.1.0"
-
-# 2. tag it - this is what triggers the workflow
-git tag -a v0.1.0 -m "protogen 0.1.0"
-git push origin main v0.1.0
-
-# 3. back to snapshots
-mvn -B versions:set -DnewVersion=0.2.0-SNAPSHOT -DgenerateBackupPoms=false
-git commit -am "Back to snapshot"
-git push
-```
-
-The workflow refuses to publish if the pom version does not match the tag, or if it is a `SNAPSHOT`.
-
-### Before the first real release
-
-Run the workflow manually with **dryRun** ticked
-(<https://github.com/helios57/protogen/actions/workflows/release.yml> → Run workflow). It builds, signs
-and uploads the artifacts as a GitHub artifact without touching Central, so you can confirm the signing
-key works before anything is published — Central deployments cannot be deleted once released.
-
-### The first release needs one manual click
-
-`autoPublish` is deliberately `false` in the `release` profile. The workflow uploads and validates; you
-then press **Publish** in the portal's *Deployments* view. Once a release has gone through cleanly, flip
-`<autoPublish>true</autoPublish>` in the parent pom and later releases are fully hands-off.
-
----
-
 ## What gets published
 
 | Artifact | Published | Why |
@@ -139,13 +136,13 @@ Central validates.
 mvn -Prelease deploy
 ```
 
-## Consuming it, once released
+## Consuming it
 
 ```xml
 <plugin>
     <groupId>io.github.helios57.protogen</groupId>
     <artifactId>protogen-maven-plugin</artifactId>
-    <version>0.1.0</version>
+    <version>0.2.0</version>
     <executions>
         <execution><goals><goal>generate</goal></goals></execution>
     </executions>

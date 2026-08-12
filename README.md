@@ -16,7 +16,7 @@ and why.
 <plugin>
     <groupId>io.github.helios57.protogen</groupId>
     <artifactId>protogen-maven-plugin</artifactId>
-    <version>0.1.0</version>
+    <version>0.2.0</version>
     <executions>
         <execution><goals><goal>generate</goal></goals></execution>
     </executions>
@@ -176,7 +176,7 @@ There is one **runtime** switch, read by the generated code rather than the plug
 <plugin>
     <groupId>io.github.helios57.protogen</groupId>
     <artifactId>protogen-maven-plugin</artifactId>
-    <version>0.1.0</version>
+    <version>0.2.0</version>
     <executions>
         <execution><goals><goal>generate</goal></goals></execution>
     </executions>
@@ -653,12 +653,13 @@ Anything in this table is **rejected with a `file:line:col` diagnostic**, never 
 mvn verify
 ```
 
-Requires JDK 17+ and Maven 3.9+. CI runs the same build on JDK 17, 21 and 25 and asserts that
-`protogen-it` still has no compile-scope dependency — the headline claim is checked against the artifact,
-not merely trusted. Dependency and action versions are kept current by Dependabot.
+Requires JDK 17+ and Maven 3.9+. 545 tests, of which 123 are differential against `protoc`. CI runs the
+same build on JDK 17, 21 and 25 and asserts that `protogen-it` still has no compile-scope dependency — the
+headline claim is checked against the artifact, not merely trusted. Dependency and action versions are
+kept current by Dependabot.
 
-Design notes and the roadmap are in [PLAN.md](PLAN.md); releasing is documented in
-[RELEASING.md](RELEASING.md).
+What changed per release is in [CHANGELOG.md](CHANGELOG.md); the design notes and roadmap are in
+[PLAN.md](PLAN.md), and releasing in [RELEASING.md](RELEASING.md).
 
 ## License
 

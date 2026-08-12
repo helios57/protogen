@@ -7,7 +7,8 @@ The build itself needs no native `protoc`.
 See [RESEARCH.md](RESEARCH.md) for why this does not exist yet.
 
 **Status:** phases 0–7 are done. proto2 and proto3 messages generate, round-trip, and are byte-identical to
-`protoc` across 419 tests; 0.1.0 is on Maven Central. AsyncAPI 2.x and 3.x are read as a second input.
+`protoc` across 545 tests; 0.2.0 is on Maven Central. AsyncAPI 2.x and 3.x are read as a second input, and
+the generated code is faster than `protobuf-java` on every shape except `protoSize()` called on its own.
 
 ---
 
@@ -94,8 +95,11 @@ public record NodeV1(
   constructor and every `equals`. Turn on `preserveUnknownFields` where it matters — see §6.
 * **An unknown enum value becomes `UNRECOGNIZED`** and is not re-encoded. `protoc` keeps the raw number.
 * **`protoSize()` called on its own is recomputed** rather than memoised, because a record has no mutable
-  field to cache in. Encoding is not affected: `toByteArray()` measures each nested payload once into a
-  plan the write reads back, so nothing is measured twice.
+  field to cache in - Java forbids instance fields in a record, so the size could only be a component,
+  with a meaningless extra parameter on every constructor call. Encoding is not affected:
+  `toByteArray()` measures each nested payload once into a plan the write reads back. Caching it was
+  measured and rejected: it would make every parse 20-40% slower to speed up a case that is already
+  fast, see [BENCHMARKS.md](BENCHMARKS.md#why-the-size-is-not-cached-in-the-record).
 
 ## 4. Timestamp and Instant
 
@@ -122,7 +126,7 @@ compact constructor, so an invalid message cannot be constructed — by hand or 
 | Annotation | Applies to | Check |
 |---|---|---|
 | `@MinLength n` / `@MaxLength n` | `string` | length bounds |
-| `@Pattern regex` | `string` | compiled once into a `static final Pattern` |
+| `@Pattern regex` | `string` | compiled into a scan over the characters, or a `static final Pattern` when the pattern needs backtracking (below) |
 | `@Minimum n` / `@Maximum n` (aliases `@Min` / `@Max`) | numeric | inclusive bounds |
 | `@ExclusiveMinimum n` / `@ExclusiveMaximum n` | numeric | exclusive bounds |
 | `@MultipleOf n` | integral | exact multiple |
@@ -134,6 +138,27 @@ compact constructor, so an invalid message cannot be constructed — by hand or 
 field, so a constraint on such a field is enforced on *every* instance — it effectively becomes required.
 Put the constraint on an `optional` field when it should apply only when the value is set. Both behaviours
 are pinned in `ValidationTest`.
+
+### `@Pattern` without a regex engine
+
+An anchored pattern built from character classes is a loop over characters written in another notation, so
+the generator writes that loop instead of handing it to `java.util.regex`. It is the difference between a
+`Matcher` and its group arrays per message and no allocation at all: on a batch of a hundred KPIs whose key
+carries `^[a-zA-Z_:][a-zA-Z0-9_:]*$`, the regex engine was 48% of the cost of decoding.
+
+A pattern is only compiled when a greedy left-to-right scan provably gives the same answer:
+
+* anchored at both ends, so there is no search to do;
+* every element a literal, a class, `.`, or one of `\d \w \s \D \W \S`, optionally quantified with
+  `? * +` or `{n,m}`;
+* no variable-length term able to consume a character the rest of the pattern needs — `^[a-z]*a$` would
+  need backtracking, and a greedy scan would answer differently.
+
+Everything else keeps the regex, which stays correct. The scan compares **code points**, not `char`s,
+because that is what `java.util.regex` counts — a surrogate pair is one character to both.
+
+Agreement is checked rather than argued: every pattern is generated, compiled with `javac` and run against
+a corpus built from its own alphabet, and compared with `Pattern.matches`.
 
 ## 5a. The three opt-ins
 
@@ -261,6 +286,25 @@ scaffold points at that step rather than writing it.
 Because nothing in a normal build compiles the scaffolding, the tests compile it on purpose - otherwise it
 is exactly the kind of output that rots unnoticed.
 
+## 7b. Immutable collections without wrappers
+
+A record's list and map components have to be immutable, and `Collections.unmodifiable*` is the obvious
+way to get there. It is also the wrong one here:
+
+* it does not actually finish the job - `unmodifiableSet(m.entrySet())` still hands out entries whose
+  `setValue` writes straight through to the backing map;
+* it is a wrapper over a map this package already holds the only reference to.
+
+So the generated codec carries its own. A collection a caller passes in is copied, because they keep
+theirs. One that `parse` built is **handed over**, because nobody else can reach it - which is a full
+rehash saved per map field parsed. The entry set a message hands out copies each entry on the way past,
+while the sizing and writing passes read the backing entries directly, since they walk every map twice per
+encode.
+
+Repeated fields work the same way and are walked by index, so no iterator is allocated per field per pass.
+The one asymmetry is measured: handing a *caller's* list to a wrapper rather than to `List.copyOf` cost
+3 µs on a tree five deep, so that path still copies.
+
 ## 8. Verification
 
 Two modules, deliberately separated:
@@ -281,6 +325,13 @@ Three real codec bugs were caught this way and fixed: an unpaired surrogate size
 encoded as one, `-0.0` skipped as if it were the default, and `Timestamp` presence differing from a bare
 `int64`.
 
+**Generated code that behaviour depends on is compiled and run in the tests, not asserted as text.** The
+`@Pattern` scans are generated, compiled with `javac`, and compared against `java.util.regex` over a corpus
+built from each pattern's own alphabet - which is how the surrogate-pair difference turned up, since the
+regex counts code points and a scan over `char`s called an emoji two characters. The AsyncAPI scaffolding
+gets the same treatment for the opposite reason: nothing in a normal build compiles it, so it would rot
+unnoticed.
+
 ## 9. Phases
 
 | Phase | Deliverable | State |
@@ -291,8 +342,8 @@ encoded as one, `-0.0` skipped as if it were the default, and `Timestamp` presen
 | **3** | `repeated` packed and unpacked, `map`, `oneof`, `Instant`, validation | ✅ |
 | **4** | Mojo hardening: includes/excludes, offline, multi-module | ✅ |
 | **5** | Verification: zero-dependency compile and run, differential vs protoc, fuzz | ✅ |
-| **6** | Optimization: JMH harness against protobuf-java, CI | ✅ harness, numbers, and three rounds of profiling acted on |
-| **7** | Release: Maven Central publishing, signing, CI release workflow, Dependabot | ✅ wired; awaiting the account credentials in [RELEASING.md](RELEASING.md) |
+| **6** | Optimization: JMH harness against protobuf-java, CI | ✅ harness, numbers, and four rounds of profiling acted on |
+| **7** | Release: Maven Central publishing, signing, CI release workflow, Dependabot | ✅ 0.1.0 and 0.2.0 published |
 
 Measured results and how to read them: [BENCHMARKS.md](BENCHMARKS.md).
 
@@ -303,11 +354,17 @@ Measured results and how to read them: [BENCHMARKS.md](BENCHMARKS.md).
    the current test uses.
 2. ~~**`protoSize()` memoisation**~~ — **done, without giving up records.** The sizing pass records each
    nested payload's size in the order the write reads it back, so a subtree is measured once per encode
-   rather than once per level. Encoding a tree five deep went from 2.1× slower than protobuf-java to 1.34×
-   faster. See [BENCHMARKS.md](BENCHMARKS.md).
+   rather than once per level. Encoding a tree five deep went from 2.1× slower than protobuf-java to 1.45×
+   faster. Caching the size *in the record* was measured separately and rejected - it would cost every
+   parse 20-40% to speed up a case that is no longer slow. See [BENCHMARKS.md](BENCHMARKS.md).
 3. ~~**Validation on parse**~~ — **done**: two switches, one at generation time and one at runtime (§5a).
    The runtime one gives the lenient parse for legacy data.
 4. ~~**`@Example` / `@RootNode`**~~ — **done**: a JSON sidecar under `META-INF/protogen/` (§5a). Still
    open: wiring that sidecar into the AsyncAPI generator itself, which lives in another repo.
 5. **Unknown enum values are still dropped** on re-encode, where `protoc` keeps the raw number. Preserving
    one needs a second component per enum field, the same trade unknown fields make; nobody has needed it.
+6. **An import is matched by file name** when its path does not match, because a parsed file knows only
+   the name it was read under. Two files with the same base name in different directories are therefore
+   indistinguishable to the import check. Fixing it means carrying the path relative to the source root
+   through the compiler, which also changes where the metadata sidecars land.
+7. **Editions (2023/2024)** are watched, not implemented.
