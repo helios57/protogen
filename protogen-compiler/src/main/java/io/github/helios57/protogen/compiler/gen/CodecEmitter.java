@@ -42,6 +42,7 @@ final class CodecEmitter {
         emitReader(out);
         emitUnknownBuffer(out);
         emitMapView(out);
+        emitListView(out);
         emitSizePlan(out);
 
         out.outdent();
@@ -55,6 +56,11 @@ final class CodecEmitter {
             out.javadoc("Writes {@code value} as an unsigned varint. @return the new position");
             out.line("static int wUVarint32(byte[] b, int p, int value) {");
             out.indent();
+            out.line("// most of these are a tag or a small length, and fit in the one byte");
+            out.line("if ((value & ~0x7f) == 0) {");
+            out.line("    b[p] = (byte) value;");
+            out.line("    return p + 1;");
+            out.line("}");
             out.line("while ((value & ~0x7f) != 0) {");
             out.indent();
             out.line("b[p++] = (byte) ((value & 0x7f) | 0x80);");
@@ -652,6 +658,20 @@ final class CodecEmitter {
 
         out.blank();
         out.javadoc("""
+                The entries of a map component, for this package's own sizing and writing passes.
+
+                @param <K> the key type
+                @param <V> the value type
+                @param m   a map component
+                @return its entries, without the per-entry copy the public view has to make""");
+        out.line("static <K, V> java.util.Set<java.util.Map.Entry<K, V>> entries(java.util.Map<K, V> m) {");
+        out.indent();
+        out.line("return m instanceof M<K, V> mine ? mine.raw() : m.entrySet();");
+        out.outdent();
+        out.line("}");
+
+        out.blank();
+        out.javadoc("""
                 An unmodifiable map that owns its entries rather than viewing someone else's.
 
                 <p>{@code Collections.unmodifiableMap} is a view: whoever passed the backing map in can still
@@ -669,21 +689,19 @@ final class CodecEmitter {
         out.blank();
         out.line("@Override");
         out.line("public java.util.Set<Entry<K, V>> entrySet() {");
-        out.indent();
-        out.line("// through the whole map, not unmodifiableSet(m.entrySet()): that one still hands out");
-        out.line("// entries whose setValue writes straight through to the backing map");
-        out.line("return java.util.Collections.unmodifiableMap(m).entrySet();");
-        out.outdent();
+        out.line("    return new Entries<>(m);");
         out.line("}");
         out.blank();
-        out.line("@Override");
-        out.line("public java.util.Set<K> keySet() {");
-        out.line("    return java.util.Collections.unmodifiableSet(m.keySet());");
-        out.line("}");
-        out.blank();
-        out.line("@Override");
-        out.line("public java.util.Collection<V> values() {");
-        out.line("    return java.util.Collections.unmodifiableCollection(m.values());");
+        out.javadoc("""
+                The entries, as this package's own codec sees them: the backing map's, uncopied.
+
+                <p>Not for handing out - {@link Entry#setValue} on one of these writes through - but the
+                sizing and writing passes iterate every map on every encode, and a view that copies each
+                entry on the way past would allocate one object per entry per pass.
+
+                @return the backing entries, to be read and not published""");
+        out.line("java.util.Set<Entry<K, V>> raw() {");
+        out.line("    return m.entrySet();");
         out.line("}");
         out.blank();
         out.line("// AbstractMap would walk the entries for each of these");
@@ -735,6 +753,197 @@ final class CodecEmitter {
         out.line("@Override");
         out.line("public String toString() {");
         out.line("    return m.toString();");
+        out.line("}");
+        out.outdent();
+        out.line("}");
+
+        out.blank();
+        out.javadoc("""
+                The entry set a map component hands out.
+
+                <p>Each entry is copied on the way past, which is what makes the map immutable all the way
+                down: an entry straight from the backing map would carry a {@code setValue} that writes
+                through it. Only what leaves this package pays for that - {@link M#raw} does not.""");
+        out.line("private static final class Entries<K, V> extends java.util.AbstractSet<"
+                + "java.util.Map.Entry<K, V>> {");
+        out.indent();
+        out.blank();
+        out.line("private final java.util.Map<K, V> m;");
+        out.blank();
+        out.line("Entries(java.util.Map<K, V> m) {");
+        out.line("    this.m = m;");
+        out.line("}");
+        out.blank();
+        out.line("@Override");
+        out.line("public int size() {");
+        out.line("    return m.size();");
+        out.line("}");
+        out.blank();
+        out.line("@Override");
+        out.line("public boolean contains(Object o) {");
+        out.indent();
+        out.line("if (!(o instanceof java.util.Map.Entry<?, ?> e)) {");
+        out.line("    return false;");
+        out.line("}");
+        out.line("Object value = m.get(e.getKey());");
+        out.line("return value != null ? value.equals(e.getValue())");
+        out.line("        : e.getValue() == null && m.containsKey(e.getKey());");
+        out.outdent();
+        out.line("}");
+        out.blank();
+        out.line("@Override");
+        out.line("public java.util.Iterator<java.util.Map.Entry<K, V>> iterator() {");
+        out.indent();
+        out.line("java.util.Iterator<java.util.Map.Entry<K, V>> backing = m.entrySet().iterator();");
+        out.line("return new java.util.Iterator<>() {");
+        out.indent();
+        out.blank();
+        out.line("@Override");
+        out.line("public boolean hasNext() {");
+        out.line("    return backing.hasNext();");
+        out.line("}");
+        out.blank();
+        out.line("@Override");
+        out.line("public java.util.Map.Entry<K, V> next() {");
+        out.line("    return new Pair<>(backing.next());");
+        out.line("}");
+        out.outdent();
+        out.line("};");
+        out.outdent();
+        out.line("}");
+        out.outdent();
+        out.line("}");
+
+        out.blank();
+        out.javadoc("""
+                One entry of a map component: a key and a value, and no way back to the map.
+
+                <p>{@code Map.entry} would do, except that it rejects a null key or value, and a map handed
+                in by a caller is allowed to hold them right up until something tries to encode it.""");
+        out.line("private static final class Pair<K, V> implements java.util.Map.Entry<K, V> {");
+        out.indent();
+        out.blank();
+        out.line("private final K key;");
+        out.line("private final V value;");
+        out.blank();
+        out.line("Pair(java.util.Map.Entry<K, V> e) {");
+        out.line("    this.key = e.getKey();");
+        out.line("    this.value = e.getValue();");
+        out.line("}");
+        out.blank();
+        out.line("@Override");
+        out.line("public K getKey() {");
+        out.line("    return key;");
+        out.line("}");
+        out.blank();
+        out.line("@Override");
+        out.line("public V getValue() {");
+        out.line("    return value;");
+        out.line("}");
+        out.blank();
+        out.line("@Override");
+        out.line("public V setValue(V replacement) {");
+        out.line("    throw new UnsupportedOperationException(\"this map is immutable\");");
+        out.line("}");
+        out.blank();
+        out.line("@Override");
+        out.line("public boolean equals(Object o) {");
+        out.indent();
+        out.line("// the Map.Entry contract: equal to any entry with an equal key and value");
+        out.line("return o instanceof java.util.Map.Entry<?, ?> e");
+        out.line("        && java.util.Objects.equals(key, e.getKey())");
+        out.line("        && java.util.Objects.equals(value, e.getValue());");
+        out.outdent();
+        out.line("}");
+        out.blank();
+        out.line("@Override");
+        out.line("public int hashCode() {");
+        out.line("    return (key == null ? 0 : key.hashCode()) ^ (value == null ? 0 : value.hashCode());");
+        out.line("}");
+        out.blank();
+        out.line("@Override");
+        out.line("public String toString() {");
+        out.line("    return key + \"=\" + value;");
+        out.line("}");
+        out.outdent();
+        out.line("}");
+    }
+
+    /**
+     * The immutable list a record's repeated component holds, and the two ways of getting one.
+     * <p>
+     * The same trade as {@link Feature#MAP_VIEW}: a list handed in from outside is copied, one that
+     * {@code parse} just built is handed over. {@code List.copyOf} would copy it a second time.
+     */
+    private void emitListView(Java out) {
+        if (!features.contains(Feature.LIST_VIEW)) {
+            return;
+        }
+        out.blank();
+        out.javadoc("""
+                Normalises a repeated component: absent becomes empty, and a caller's list is copied.
+
+                @param <E> the element type
+                @param l   the list as passed in
+                @return an immutable list with the same elements, in the same order
+                @throws NullPointerException if an element is null""");
+        out.line("static <E> java.util.List<E> list(java.util.List<E> l) {");
+        out.indent();
+        out.line("if (l == null) {");
+        out.line("    return java.util.List.of();");
+        out.line("}");
+        out.line("if (l instanceof L) {");
+        out.line("    return l;");
+        out.line("}");
+        out.line("// List.copyOf, not a wrapper: it makes one compact immutable copy and rejects nulls,");
+        out.line("// and a caller's list has to be copied anyway. Only parse gets to skip that, through own");
+        out.line("return java.util.List.copyOf(l);");
+        out.outdent();
+        out.line("}");
+
+        out.blank();
+        out.javadoc("""
+                Wraps a list nobody else can reach, without copying it.
+
+                @param <E> the element type
+                @param l   a list just built by parsing, or {@code null}
+                @return the immutable view, or {@code null}""");
+        out.line("static <E> java.util.List<E> own(java.util.List<E> l) {");
+        out.line("    return l == null ? null : new L<>(l);");
+        out.line("}");
+
+        out.blank();
+        out.javadoc("""
+                An unmodifiable list that owns its elements rather than viewing someone else's.
+
+                <p>{@code AbstractList} refuses every mutation, including through an iterator, and gives the
+                {@code List} contract for {@code equals} and {@code hashCode}.""");
+        out.line("private static final class L<E> extends java.util.AbstractList<E> {");
+        out.indent();
+        out.blank();
+        out.line("private final java.util.List<E> l;");
+        out.blank();
+        out.line("L(java.util.List<E> owned) {");
+        out.line("    this.l = owned;");
+        out.line("}");
+        out.blank();
+        out.line("@Override");
+        out.line("public E get(int index) {");
+        out.line("    return l.get(index);");
+        out.line("}");
+        out.blank();
+        out.line("@Override");
+        out.line("public int size() {");
+        out.line("    return l.size();");
+        out.line("}");
+        out.blank();
+        out.line("@Override");
+        out.line("public boolean removeIf(java.util.function.Predicate<? super E> filter) {");
+        out.indent();
+        out.line("// the inherited one only fails once something matches, so an immutable list would");
+        out.line("// quietly accept the call whenever the predicate happened to match nothing");
+        out.line("throw new UnsupportedOperationException(\"this list is immutable\");");
+        out.outdent();
         out.line("}");
         out.outdent();
         out.line("}");

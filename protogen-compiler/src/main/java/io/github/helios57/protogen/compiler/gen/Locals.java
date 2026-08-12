@@ -26,6 +26,9 @@ final class Locals {
     final String length;
     final String out;
     final String element;
+    /** The loop index and bound for an indexed walk over a repeated field. */
+    final String index;
+    final String count;
     final String entry;
     final String key;
     final String value;
@@ -50,8 +53,19 @@ final class Locals {
     /** The trailing component holding unknown fields, when preservation is enabled. */
     final String unknown;
 
+    private final Set<String> taken = new HashSet<>();
+
+    /**
+     * Allocates a name nothing else in the record uses.
+     *
+     * @param preferred the name to use if it is free
+     * @return that name, or an underscore-suffixed variant that is
+     */
+    String free(String preferred) {
+        return free(preferred, taken);
+    }
+
     Locals(List<Defs.FieldDef> fields) {
-        Set<String> taken = new HashSet<>();
         for (Defs.FieldDef f : fields) {
             taken.add(Names.fieldName(f.name()));
         }
@@ -64,6 +78,8 @@ final class Locals {
         this.length = free("length", taken);
         this.out = free("out", taken);
         this.element = free("v", taken);
+        this.index = free("i", taken);
+        this.count = free("count", taken);
         this.entry = free("e", taken);
         this.key = free("key", taken);
         this.value = free("value", taken);

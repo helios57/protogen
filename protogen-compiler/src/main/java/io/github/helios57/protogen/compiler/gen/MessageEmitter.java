@@ -7,8 +7,10 @@ import io.github.helios57.protogen.compiler.model.ScalarType;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * Emits one message as an immutable Java {@code record}.
@@ -152,19 +154,127 @@ final class MessageEmitter {
 
     // -------------------------------------------------- construction
 
+    /**
+     * Emits what each {@code @Pattern} needs: a scan over the characters where the pattern allows one, and
+     * a compiled {@link java.util.regex.Pattern} where it does not.
+     */
     private void emitPatternConstants(Java out, List<Defs.FieldDef> fields) {
+        if (!options.emitValidation()) {
+            return;
+        }
         for (Defs.FieldDef f : fields) {
-            if (f.constraints().pattern() != null && isStringLike(f)) {
-                out.blank();
+            String pattern = f.constraints().pattern();
+            if (pattern == null || !isStringLike(f)) {
+                continue;
+            }
+            assertValidRegex(f, pattern);
+            List<PatternCompiler.Term> terms = PatternCompiler.compile(pattern);
+            out.blank();
+            if (terms == null) {
                 out.line("private static final java.util.regex.Pattern " + patternConstant(f)
-                        + " = java.util.regex.Pattern.compile(" + Java.literal(f.constraints().pattern()) + ");");
+                        + " = java.util.regex.Pattern.compile(" + Java.literal(pattern) + ");");
+                continue;
+            }
+            emitPatternScan(out, f, pattern, terms);
+        }
+    }
+
+    /**
+     * Rejects a malformed {@code @Pattern} where it can still be pointed at.
+     * <p>
+     * Without this the bad regex is copied into the generated source and throws a
+     * {@link java.util.regex.PatternSyntaxException} when the class is first loaded - at runtime, in
+     * whatever service happens to touch the message first, with nothing to say which schema line it came
+     * from.
+     */
+    private static void assertValidRegex(Defs.FieldDef f, String pattern) {
+        try {
+            java.util.regex.Pattern.compile(pattern);
+        } catch (java.util.regex.PatternSyntaxException e) {
+            throw new io.github.helios57.protogen.compiler.ProtoCompileException(f.pos(),
+                    "@Pattern on field '" + f.name() + "' is not a valid regular expression: "
+                            + e.getDescription() + " in " + pattern);
+        }
+    }
+
+    /**
+     * Writes the pattern out as a loop over the string's characters.
+     * <p>
+     * Equivalent to {@code PATTERN.matcher(s).matches()} for the patterns
+     * {@link PatternCompiler#compile} accepts, and allocates nothing where the regex engine allocates a
+     * matcher per call - which is the whole point, since this runs on every message constructed or parsed.
+     */
+    private void emitPatternScan(Java out, Defs.FieldDef f, String pattern,
+                                 List<PatternCompiler.Term> terms) {
+        out.line("// " + Java.comment(pattern) + ", as a scan: same answer as the regex, no matcher to allocate");
+        out.line("private static boolean " + patternMethod(f) + "(String s) {");
+        out.indent();
+        out.line("int n = s.length();");
+        out.line("int i = 0;");
+        for (int t = 0; t < terms.size(); t++) {
+            PatternCompiler.Term term = terms.get(t);
+            String c = "c" + t;
+            String condition = term.chars().condition(c);
+            out.line("// " + Java.comment(term.chars().source()) + occurrences(term));
+            if (term.min() == 1 && term.max() == 1) {
+                out.line("if (i >= n) {");
+                out.line("    return false;");
+                out.line("}");
+                // by code point, because that is what the regex counts: a surrogate pair is one character
+                out.line("int " + c + " = s.codePointAt(i);");
+                out.line("if (!(" + condition + ")) {");
+                out.line("    return false;");
+                out.line("}");
+                out.line("i += Character.charCount(" + c + ");");
+                continue;
+            }
+            String matched = "matched" + t;
+            out.line("int " + matched + " = 0;");
+            String bounded = term.max() == Integer.MAX_VALUE ? "" : " && " + matched + " < " + term.max();
+            out.line("while (i < n" + bounded + ") {");
+            out.indent();
+            out.line("int " + c + " = s.codePointAt(i);");
+            out.line("if (!(" + condition + ")) {");
+            out.line("    break;");
+            out.line("}");
+            out.line("i += Character.charCount(" + c + ");");
+            out.line(matched + "++;");
+            out.outdent();
+            out.line("}");
+            if (term.min() > 0) {
+                out.line("if (" + matched + " < " + term.min() + ") {");
+                out.line("    return false;");
+                out.line("}");
             }
         }
+        out.line("return i == n;");
+        out.outdent();
+        out.line("}");
+    }
+
+    private static String occurrences(PatternCompiler.Term term) {
+        if (term.min() == 1 && term.max() == 1) {
+            return "";
+        }
+        if (term.max() == Integer.MAX_VALUE) {
+            return ", " + term.min() + " or more";
+        }
+        return term.min() == term.max()
+                ? ", exactly " + term.min()
+                : ", " + term.min() + " to " + term.max();
     }
 
     private static String patternConstant(Defs.FieldDef f) {
         return "PATTERN_" + f.name().toUpperCase(Locale.ROOT);
     }
+
+    /** The scan's name, allocated once per field and kept clear of the record's own accessors. */
+    private String patternMethod(Defs.FieldDef f) {
+        return patternMethods.computeIfAbsent(f.name(),
+                name -> locals.free("matches" + Names.toUpperCamel(name) + "Pattern"));
+    }
+
+    private final Map<String, String> patternMethods = new HashMap<>();
 
     private static boolean isStringLike(Defs.FieldDef f) {
         return f.kind() == Defs.Kind.SCALAR && f.scalar() == ScalarType.STRING;
@@ -203,7 +313,7 @@ final class MessageEmitter {
                 // ProtoWire.map copies unless the map is one parse built and handed over, which nobody else holds
                 body.add(n + " = ProtoWire.map(" + n + ");");
             } else if (f.repeated()) {
-                body.add(n + " = " + n + " == null ? java.util.List.of() : java.util.List.copyOf(" + n + ");");
+                body.add(n + " = ProtoWire.list(" + n + ");");
             } else if (!Types.nullable(f)) {
                 if (isStringLike(f)) {
                     body.add(n + " = " + n + " == null ? \"\" : " + n + ";");
@@ -335,8 +445,10 @@ final class MessageEmitter {
                             "@MaxLength " + c.maxLength(), n + ".length()"));
                 }
                 if (c.pattern() != null) {
-                    checks.add(check(guard + "!" + patternConstant(f) + ".matcher(" + n + ").matches()", where,
-                            "@Pattern " + c.pattern(), n));
+                    String test = PatternCompiler.compile(c.pattern()) == null
+                            ? "!" + patternConstant(f) + ".matcher(" + n + ").matches()"
+                            : "!" + patternMethod(f) + "(" + n + ")";
+                    checks.add(check(guard + test, where, "@Pattern " + c.pattern(), n));
                 }
             }
             if (isNumeric(f)) {
@@ -571,8 +683,8 @@ final class MessageEmitter {
         List<String> arguments = new ArrayList<>();
         for (Defs.FieldDef f : fields) {
             String n = Names.fieldName(f.name());
-            // nobody else holds a map parse just built, so hand it over instead of letting it be copied
-            arguments.add(f.kind() == Defs.Kind.MAP ? "ProtoWire.own(" + n + ")" : n);
+            // nobody else holds a collection parse just built, so hand it over rather than have it copied
+            arguments.add(f.kind() == Defs.Kind.MAP || f.repeated() ? "ProtoWire.own(" + n + ")" : n);
         }
         if (unknownComponent() != null) {
             arguments.add(locals.unknown + " == null ? new byte[0] : " + locals.unknown + ".toByteArray()");
@@ -860,7 +972,7 @@ final class MessageEmitter {
                     out.line("int " + locals.slot + " = " + plan + ".reserve();");
                 }
                 out.line("int " + locals.payload + " = 0;");
-                out.line("for (" + Types.boxedElementType(f, javaPackage) + " " + locals.element + " : " + n + ") {");
+                emitElementLoop(out, f, n);
                 out.line("    " + locals.payload + " += " + sizeExpr(f, locals.element) + ";");
                 out.line("}");
                 if (plan != null) {
@@ -871,7 +983,7 @@ final class MessageEmitter {
                 out.outdent();
                 out.line("}");
             } else if (f.kind() == Defs.Kind.MESSAGE) {
-                out.line("for (" + Types.boxedElementType(f, javaPackage) + " " + locals.element + " : " + n + ") {");
+                emitElementLoop(out, f, n);
                 out.indent();
                 emitNestedSize(out, f, locals.element, plan);
                 out.line(size + " += " + tagSize + " + ProtoWire.sUVarint32(" + locals.nested + ") + "
@@ -879,7 +991,7 @@ final class MessageEmitter {
                 out.outdent();
                 out.line("}");
             } else {
-                out.line("for (" + Types.boxedElementType(f, javaPackage) + " " + locals.element + " : " + n + ") {");
+                emitElementLoop(out, f, n);
                 out.line("    " + size + " += " + tagSize + " + " + sizeExpr(f, locals.element) + ";");
                 out.line("}");
             }
@@ -918,10 +1030,27 @@ final class MessageEmitter {
         out.line(plan + ".set(" + locals.slot + ", " + locals.nested + ");");
     }
 
+    /**
+     * Opens a loop over a repeated field, by index.
+     * <p>
+     * The component is always {@code ProtoWire.L} or {@code List.of()}, both of which index in constant
+     * time, and sizing and writing walk every repeated field on every encode - so this is one iterator not
+     * allocated per field per pass.
+     */
+    private void emitElementLoop(Java out, Defs.FieldDef f, String n) {
+        String i = locals.index;
+        out.line("for (int " + i + " = 0, " + locals.count + " = " + n + ".size(); "
+                + i + " < " + locals.count + "; " + i + "++) {");
+        out.line("    " + Types.boxedElementType(f, javaPackage) + " " + locals.element
+                + " = " + n + ".get(" + i + ");");
+    }
+
     private void emitMapLoopHeader(Java out, Defs.FieldDef f, String n) {
+        // ProtoWire.entries, not entrySet(): the public view copies each entry to keep the map immutable,
+        // and sizing and writing walk every map on every encode
         out.line("for (java.util.Map.Entry<" + Types.boxedElementType(f.mapKey(), javaPackage) + ", "
-                + Types.boxedElementType(f.mapValue(), javaPackage) + "> " + locals.entry + " : "
-                + n + ".entrySet()) {");
+                + Types.boxedElementType(f.mapValue(), javaPackage) + "> " + locals.entry
+                + " : ProtoWire.entries(" + n + ")) {");
     }
 
     /**
@@ -1102,14 +1231,13 @@ final class MessageEmitter {
                     out.line("int " + locals.payload + " = " + plan + ".next();");
                 } else {
                     out.line("int " + locals.payload + " = 0;");
-                    out.line("for (" + Types.boxedElementType(f, javaPackage) + " " + locals.element + " : "
-                            + n + ") {");
+                    emitElementLoop(out, f, n);
                     out.line("    " + locals.payload + " += " + sizeExpr(f, locals.element) + ";");
                     out.line("}");
                 }
                 out.line(locals.offset + " = ProtoWire.wUVarint32(" + locals.target + ", " + locals.offset
                         + ", " + locals.payload + ");");
-                out.line("for (" + Types.boxedElementType(f, javaPackage) + " " + locals.element + " : " + n + ") {");
+                emitElementLoop(out, f, n);
                 out.indent();
                 emitValueWrite(out, f, locals.element);
                 out.outdent();
@@ -1117,14 +1245,14 @@ final class MessageEmitter {
                 out.outdent();
                 out.line("}");
             } else if (f.kind() == Defs.Kind.MESSAGE) {
-                out.line("for (" + Types.boxedElementType(f, javaPackage) + " " + locals.element + " : " + n + ") {");
+                emitElementLoop(out, f, n);
                 out.indent();
                 emitTagWrite(out, Types.writtenTag(f));
                 emitNestedWrite(out, f, locals.element, plan);
                 out.outdent();
                 out.line("}");
             } else {
-                out.line("for (" + Types.boxedElementType(f, javaPackage) + " " + locals.element + " : " + n + ") {");
+                emitElementLoop(out, f, n);
                 out.indent();
                 emitTagWrite(out, Types.writtenTag(f));
                 emitValueWrite(out, f, locals.element);

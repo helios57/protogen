@@ -67,6 +67,8 @@ public enum Feature {
     UNKNOWN,
     /** The immutable map view a record's map component is normalised to. */
     MAP_VIEW,
+    /** The immutable list view a record's repeated component is normalised to. */
+    LIST_VIEW,
     /** The list of nested sizes an encode computes once and the write consumes. */
     SIZES;
 
@@ -136,6 +138,9 @@ public enum Feature {
     }
 
     private static void collect(Defs.FieldDef field, String javaPackage, EnumSet<Feature> used) {
+        if (field.repeated() && field.kind() != Defs.Kind.MAP) {
+            used.add(Feature.LIST_VIEW);
+        }
         if (field.repeated() && isPacked(field)) {
             used.add(Feature.R_LIMIT);
             used.add(Feature.W_UVARINT32);

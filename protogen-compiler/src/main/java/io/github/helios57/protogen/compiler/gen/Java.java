@@ -62,6 +62,16 @@ final class Java {
         line(" */");
     }
 
+    /**
+     * Makes schema text safe to drop into a {@code //} comment.
+     *
+     * @param text the text as the schema wrote it
+     * @return the text with anything that would end the comment, or the line, neutralised
+     */
+    static String comment(String text) {
+        return text.replace("*/", "* /").replace('\n', ' ').replace('\r', ' ');
+    }
+
     /** Escapes a value for use inside a Java string literal. */
     static String literal(String value) {
         StringBuilder out = new StringBuilder(value.length() + 8);
