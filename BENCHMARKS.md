@@ -32,10 +32,10 @@ the ratios as the signal, not the absolute nanoseconds.
 
 | Benchmark | protogen | protobuf-java | |
 |---|---|---|---|
-| `buildAndEncode` | **88.3** | 183.2 | **2.1× faster** |
-| `decode` | **160.0** | 213.5 | 1.33× faster |
-| `encode` (reused instance) | 72.5 | 66.3 | 1.09× slower |
-| `protoSize` alone | 32.1 | 0.44 | protobuf-java returns a cached value |
+| `buildAndEncode` | **92.1** | 184.0 | **2.0× faster** |
+| `decode` | **159.8** | 211.7 | 1.32× faster |
+| `encode` (reused instance) | 71.1 | 66.5 | 1.07× slower |
+| `protoSize` alone | 32.3 | 0.48 | protobuf-java returns a cached value |
 
 The `protoSize` row is not a real workload, it isolates the memoisation: protobuf-java is not computing
 anything there, it is reading a field.
@@ -44,33 +44,47 @@ anything there, it is reading a field.
 
 | depth | nodes | | protogen | protobuf-java | |
 |---|---|---|---|---|---|
-| 1 | 3 | `encode` | **419** | 626 | 1.49× faster |
-| 3 | 15 | `encode` | **2 207** | 3 205 | 1.45× faster |
-| 5 | 63 | `encode` | **9 997** | 13 432 | 1.34× faster |
-| 1 | 3 | `decode` | **543** | 783 | 1.44× faster |
-| 3 | 15 | `decode` | **2 759** | 4 018 | 1.46× faster |
-| 5 | 63 | `decode` | **11 855** | 16 893 | 1.43× faster |
-| 1 | 3 | `buildAndEncode` | **675** | 1 347 | 2.00× faster |
-| 3 | 15 | `buildAndEncode` | **3 680** | 6 913 | 1.88× faster |
-| 5 | 63 | `buildAndEncode` | **15 681** | 29 864 | 1.90× faster |
+| 1 | 3 | `encode` | **365** | 649 | 1.78× faster |
+| 3 | 15 | `encode` | **2 131** | 3 291 | 1.54× faster |
+| 5 | 63 | `encode` | **9 321** | 13 492 | 1.45× faster |
+| 1 | 3 | `decode` | **477** | 778 | 1.63× faster |
+| 3 | 15 | `decode` | **2 497** | 4 004 | 1.60× faster |
+| 5 | 63 | `decode` | **10 330** | 18 290 | 1.77× faster |
+| 1 | 3 | `buildAndEncode` | **715** | 1 375 | 1.92× faster |
+| 3 | 15 | `buildAndEncode` | **3 613** | 6 938 | 1.92× faster |
+| 5 | 63 | `buildAndEncode` | **15 445** | 29 454 | 1.91× faster |
 
 ### Realistic batch of OpenMetrics KPIs (`KpiBenchmark`, µs/op)
 
-`KpiV1.key` carries a `@Pattern` annotation, so **every protogen message runs the regex** on construction
-and on parse. protobuf-java has no notion of the constraint and does no such check — it will happily
-produce and accept an invalid metric name. The remaining decode gap is largely the price of that guarantee.
+`KpiV1.key` carries a `@Pattern` annotation, so **every protogen message checks it** on construction and
+on parse. protobuf-java has no notion of the constraint and does no such check — it will happily produce
+and accept an invalid metric name. protogen still wins these, having stopped paying a regex engine for it.
 
 | items | | protogen | protobuf-java | |
 |---|---|---|---|---|
-| 10 | `encode` | **1.13** | 1.46 | 1.29× faster |
-| 100 | `encode` | **10.82** | 11.89 | 1.10× faster |
-| 10 | `decode` | 2.26 | 2.11 | 1.07× slower |
-| 100 | `decode` | 24.15 | 20.75 | 1.16× slower |
-| 10 | `buildAndEncode` | 3.16 | 2.70 | 1.17× slower |
-| 100 | `buildAndEncode` | **30.45** | 30.96 | parity |
+| 10 | `encode` | 1.22 | 0.99 | 1.24× slower |
+| 100 | `encode` | **10.88** | 11.74 | 1.08× faster |
+| 10 | `decode` | **1.28** | 2.04 | 1.59× faster |
+| 100 | `decode` | **13.61** | 20.35 | 1.49× faster |
+| 10 | `buildAndEncode` | **1.61** | 2.69 | 1.67× faster |
+| 100 | `buildAndEncode` | **18.04** | 31.48 | 1.75× faster |
 
-Allocation, same schema, `-prof gc`: **86.3 kB/op** to decode a batch of 100 against protobuf-java's
-98.1 kB/op.
+Allocation, same schema, `-prof gc`: **73.5 kB/op** to decode a batch of 100 against protobuf-java's
+98.1 kB/op, and **71.7 kB/op** to build and encode one against 105.1 kB/op.
+
+### What the constraint costs, isolated
+
+Running the same benchmark with `-Dprotogen.validation=false` says what the `@Pattern` is worth, which is
+the only honest way to compare against a library that does not offer the feature:
+
+| decode, 100 items | time | allocation |
+|---|---|---|
+| validation on, as a regex | 23.3 µs | 86.3 kB |
+| validation on, as a scan | **13.6 µs** | 73.5 kB |
+| validation off | 12.2 µs | 73.5 kB |
+
+The regex was **48% of decoding**. Written out as a scan the same guarantee costs about 10%, and allocates
+nothing — the remaining gap to "off" is the character comparisons themselves.
 
 ## What this tells us
 
@@ -81,22 +95,29 @@ Allocation, same schema, `-prof gc`: **86.3 kB/op** to decode a batch of 100 aga
    has to know how long its payload is before writing it, and a record has nowhere to cache one, so the
    write used to re-measure every subtree the sizing pass had just measured — a full re-descent per level.
    The sizing pass now records those sizes in the order the write reads them back. Encoding a tree five
-   deep went from 24.1 µs to 10.0 µs, which turned a 2.1× loss into a 1.34× win.
-3. **Validation is not free.** The Kpi decode gap is a regex per message. That is the deliberate trade for
-   "an invalid message cannot be constructed" — and it only exists where the schema declares a constraint.
-   `ScalarsBenchmark` shows the codec without it.
-4. **protobuf-java's builder is expensive.** It loses build-then-encode on flat messages by 2.1× and on
+   deep went from 24.1 µs to 9.3 µs, which turned a 2.1× loss into a 1.45× win.
+3. **A constraint no longer costs a regex engine.** An anchored `@Pattern` built from character classes is
+   compiled into a scan over the string, so the check that used to allocate a `Matcher` per message now
+   allocates nothing. Patterns needing real backtracking keep the regex.
+4. **protobuf-java's builder is expensive.** It loses build-then-encode on flat messages by 2.0× and on
    trees by ~1.9× despite winning the isolated `protoSize` comparison; its memoisation is paid for at
    construction time.
-5. **`protoSize()` on its own is still 70× slower**, and always will be: it computes, protobuf-java reads a
+5. **`protoSize()` on its own is still ~67× slower**, and always will be: it computes, protobuf-java reads a
    field. It only matters if you call `protoSize()` repeatedly on an instance you never serialize.
 
 ## What was tried and rejected
 
-Kept here so it is not re-attempted: **encoding strings character by character straight into the output
-buffer**, to avoid the array `String.getBytes(UTF_8)` allocates. It measured 1.7× slower on a flat message
-(72.5 ns → 123.2 ns) and 1.5× slower on a batch of KPIs. On a compact (Latin-1) string `getBytes` is an
-intrinsic that moves bytes in bulk; a hand-rolled loop cannot compete. The allocation stays.
+Kept here so they are not re-attempted.
+
+**Encoding strings character by character straight into the output buffer**, to avoid the array
+`String.getBytes(UTF_8)` allocates. It measured 1.7× slower on a flat message (72.5 ns → 123.2 ns) and 1.5×
+slower on a batch of KPIs. On a compact (Latin-1) string `getBytes` is an intrinsic that moves bytes in
+bulk; a hand-rolled loop cannot compete. The allocation stays.
+
+**Handing a caller's list to the immutable wrapper** instead of to `List.copyOf`, for symmetry with the
+map. Building a tree five deep went from 15.4 µs to 18.7 µs: a caller's list has to be copied either way,
+and `List.copyOf` makes one compact copy where the wrapper adds an `ArrayList` and an object around it.
+Only `parse`, whose list nobody else can reach, hands its list over.
 
 ## Caveats
 

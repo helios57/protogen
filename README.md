@@ -119,8 +119,11 @@ public record NodeV1(
 ```
 
 **What the compact constructor does for you:** normalises `null` to the proto3 default, copies collections
-into unmodifiable views, defensively copies `byte[]` in *and* out, enforces the constraints declared in the
-schema, and rejects two members of the same `oneof` being set at once.
+into immutable ones, defensively copies `byte[]` in *and* out, enforces the constraints declared in the
+schema, and rejects two members of the same `oneof` being set at once. The collections are immutable all
+the way down — `entrySet().iterator().next().setValue(...)` is rejected, not quietly written through — and
+a collection `parseFrom` built is handed straight over rather than copied a second time, since nobody else
+can reach it.
 
 Enums get `number()` and `forNumber(int)`, plus an `UNRECOGNIZED` constant so a value from a newer schema
 never breaks an older reader. A `oneof` adds a `<name>Case()` accessor and a matching enum.
@@ -323,6 +326,48 @@ Two independent switches control it:
 |---|---|---|
 | `<emitValidation>false</emitValidation>` | plugin config | the checks are never generated |
 | `-Dprotogen.validation=false` | JVM, runtime | a `static final boolean` the JIT folds away, so carrying the capability costs nothing |
+
+### `@Pattern` is not a regex at runtime
+
+An anchored pattern built from character classes is **compiled into a scan over the string**, because that
+is all it ever was:
+
+```proto
+// @Pattern ^[a-zA-Z_:][a-zA-Z0-9_:]*$
+string key = 1;
+```
+
+```java
+private static boolean matchesKeyPattern(String s) {
+    int n = s.length();
+    int i = 0;
+    // [a-zA-Z_:]
+    if (i >= n) {
+        return false;
+    }
+    int c0 = s.codePointAt(i);
+    if (!(c0 == ':' || (c0 >= 'A' && c0 <= 'Z') || c0 == '_' || (c0 >= 'a' && c0 <= 'z'))) {
+        return false;
+    }
+    i += Character.charCount(c0);
+    // [a-zA-Z0-9_:], 0 or more
+    ...
+}
+```
+
+No `Matcher`, no group arrays, nothing allocated — on a batch of a hundred KPIs the regex engine was
+**48% of decode time**, and the scan is about 10%.
+
+A pattern is only compiled when a greedy left-to-right scan provably gives the same answer as
+`java.util.regex`: anchored at both ends, built from literals, classes, `.`, `\d \w \s \D \W \S` and the
+`? * + {n,m}` quantifiers, and with no variable-length term able to consume a character the rest of the
+pattern needs. `^[a-z]*a$` needs backtracking, so it keeps the regex — as do alternation, groups,
+lookaround and backreferences. Both paths are correct; only the fast one is fast.
+
+Every accepted pattern is generated, compiled and run against a corpus built from its own alphabet and
+compared with `Pattern.matches`, so agreement is checked rather than argued. A **malformed** `@Pattern`
+now fails the build with a `file:line:col`, instead of throwing `PatternSyntaxException` in whichever
+service loads the class first.
 
 > **Worth knowing:** proto3 cannot distinguish *absent* from *default*, so a constraint on an
 > implicit-presence field is enforced on **every** instance — it effectively becomes required. Put the
@@ -528,16 +573,17 @@ Measured against `protobuf-java` on identical schemas — full numbers and cavea
 
 | | protogen vs protobuf-java |
 |---|---|
-| Build a message and encode it | **1.9–2.1× faster**, flat or nested |
-| Decode | **1.3–1.5× faster** on trees and flat messages, and allocates less |
-| Encode the *same instance* repeatedly, nested 5 deep | **1.34× faster** |
-| `protoSize()` on its own, nothing else | **70× slower** — protobuf-java returns a memoised field, protogen computes |
-| Schemas with `@Pattern` | slower by the cost of the regex, which buys a guarantee protobuf-java does not offer |
+| Build a message and encode it | **1.7–2.0× faster**, flat, nested or a batch with maps |
+| Decode | **1.3–1.8× faster**, and allocates 25% less |
+| Encode the *same instance* repeatedly, nested 5 deep | **1.45× faster** |
+| `protoSize()` on its own, nothing else | **~67× slower** — protobuf-java returns a memoised field, protogen computes |
+| Schemas with `@Pattern` | the constraint costs about 10% of a decode, for a guarantee protobuf-java does not offer at all |
 
-A length-delimited field has to know its payload size before writing it, and an immutable record has
-nowhere to cache one. Rather than give up records, the sizing pass records each nested size in the order
-the write reads it back, so nothing is measured twice — which is what turned encoding a deep tree from
-2.1× slower into 1.34× faster.
+Two things make the difference. A length-delimited field has to know its payload size before writing it,
+and an immutable record has nowhere to cache one; rather than give up records, the sizing pass records each
+nested size in the order the write reads it back, so nothing is measured twice. And an anchored `@Pattern`
+is [compiled into a scan](#validation-from-the-schema) rather than handed to `java.util.regex`, which used
+to be *half* the cost of decoding a batch of constrained messages.
 
 ```bash
 mvn -Pbenchmark package -DskipTests
