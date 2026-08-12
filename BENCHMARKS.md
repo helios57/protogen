@@ -105,6 +105,33 @@ nothing — the remaining gap to "off" is the character comparisons themselves.
 5. **`protoSize()` on its own is still ~67× slower**, and always will be: it computes, protobuf-java reads a
    field. It only matters if you call `protoSize()` repeatedly on an instance you never serialize.
 
+## Why the size is not cached in the record
+
+The obvious fix for the `protoSize` row: the message is immutable, so compute the size once and keep it.
+Two things stop it.
+
+**A record cannot hold it.** Java forbids instance fields in a record - `field declaration must be static`
+- so the size would have to become a *component*. A public record's canonical constructor must be public,
+so every caller would write `new KpiV1("k", labels, 42.0, meta, 0)` with a trailing parameter that means
+nothing and that the compact constructor immediately overwrites. It would also appear in `toString`.
+
+**It would move the cost onto every message, including the ones that are never serialized.** Sizing is not
+free, and a component has to be computed at construction - which is to say on every parse:
+
+| shape | decode | sizing alone | what eager sizing would add |
+|---|---|---|---|
+| flat, every scalar type | 162 ns | 32 ns | +20% |
+| tree, depth 1 | 482 ns | 121 ns | +25% |
+| tree, depth 5 | 10 462 ns | 4 094 ns | +39% |
+| 10 KPIs | 1.31 µs | 0.52 µs | +39% |
+| 100 KPIs | 13.68 µs | 5.26 µs | +38% |
+
+So it is a trade, not a win: parse-and-read gets 20-40% slower, build-and-encode is a wash because the
+sizing simply moves from the encode to the constructor, and only *re-encoding the same instance* gets
+faster. That last shape is the one protogen already wins - the size plan computes each nested size exactly
+once per encode - so the trade would pay for a case that is no longer a problem with a case that is the
+most common thing a consumer does.
+
 ## What was tried and rejected
 
 Kept here so they are not re-attempted.

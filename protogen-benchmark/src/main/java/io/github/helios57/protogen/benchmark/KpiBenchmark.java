@@ -107,4 +107,21 @@ public class KpiBenchmark {
     public com.java.proto.official.KpiCollectionV1 decode_protobufJava() throws Exception {
         return com.java.proto.official.KpiCollectionV1.parseFrom(encoded);
     }
+
+    /**
+     * Sizing on its own, which is what a message would pay at construction if the size were cached in it.
+     * <p>
+     * protobuf-java is reading a memoised field here rather than computing anything, so the two columns
+     * measure different things on purpose: the question this answers is what eager sizing would add to
+     * every parse and every constructor call, including the messages that are never serialized.
+     */
+    @Benchmark
+    public int size_protogen() {
+        return mine.protoSize();
+    }
+
+    @Benchmark
+    public int size_protobufJava() {
+        return theirs.getSerializedSize();
+    }
 }

@@ -612,10 +612,12 @@ Every deviation is listed here with the reason.
   This is fine for schemas you control and **not** fine for untrusted input — if you parse bytes from
   outside your trust boundary, don't use protogen for it. Removing the recursion means a two-phase
   span-scan-then-build parser, which is a redesign rather than a patch.
-- **`protoSize()` on its own is recomputed, not memoised** — a record has nowhere to cache. Encoding is
-  unaffected: `toByteArray()` measures each nested payload once and the write reads those sizes back. It
-  costs only if you call `protoSize()` repeatedly on an instance you never serialize. See
-  [BENCHMARKS.md](BENCHMARKS.md).
+- **`protoSize()` on its own is recomputed, not memoised** — a record has nowhere to cache it: Java
+  forbids instance fields in a record, so the size could only be a component, with a meaningless extra
+  parameter on every constructor call. Encoding is unaffected — `toByteArray()` measures each nested
+  payload once and the write reads those sizes back — and caching it would make every *parse* 20–40%
+  slower to speed up a case that is already fast. Measured both ways in
+  [BENCHMARKS.md](BENCHMARKS.md#why-the-size-is-not-cached-in-the-record).
 - **An import is matched by file name when the path does not match.** Imports are written relative to the
   proto root while protogen knows each file by the name it was read under, so `model/common.proto` matches
   a file read as `common.proto`. Two files with the same base name in different directories are therefore

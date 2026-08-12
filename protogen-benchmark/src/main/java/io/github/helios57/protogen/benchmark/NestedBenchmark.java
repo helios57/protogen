@@ -112,4 +112,15 @@ public class NestedBenchmark {
     public protogen.it.official.NodeV1 decode_protobufJava() throws Exception {
         return protogen.it.official.NodeV1.parseFrom(encoded);
     }
+
+    /** Sizing on its own: what caching the size in the record would cost at construction. */
+    @Benchmark
+    public int size_protogen() {
+        return mine.protoSize();
+    }
+
+    @Benchmark
+    public int size_protobufJava() {
+        return theirs.getSerializedSize();
+    }
 }
