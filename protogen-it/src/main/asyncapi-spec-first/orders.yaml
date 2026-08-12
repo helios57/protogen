@@ -1,0 +1,28 @@
+#
+# Spec-first: this document is the contract, and the .proto it points at is the payload schema.
+# There is no proto source root here - the models are generated because the document refers to them.
+#
+asyncapi: 2.6.0
+info:
+  title: Example Orders
+  version: 1.0.0
+defaultContentType: application/protobuf
+channels:
+  example/order/created/{region}:
+    description: An order was created.
+    parameters:
+      region:
+        schema:
+          type: string
+          enum: [eu, us]
+    publish:
+      message:
+        $ref: '#/components/messages/OrderCreated'
+components:
+  messages:
+    OrderCreated:
+      contentType: application/protobuf
+      schemaFormat: 'application/vnd.google.protobuf;version=3'
+      payload:
+        schema:
+          $ref: schemas/orderEventV1.proto

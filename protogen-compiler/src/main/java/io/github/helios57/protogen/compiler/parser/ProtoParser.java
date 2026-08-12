@@ -53,6 +53,7 @@ public final class ProtoParser {
         String syntax = null;
         String protoPackage = "";
         List<String> imports = new ArrayList<>();
+        List<String> publicImports = new ArrayList<>();
         Map<String, String> options = new LinkedHashMap<>();
         List<Defs.MessageDef> messages = new ArrayList<>();
         List<Defs.EnumDef> enums = new ArrayList<>();
@@ -77,10 +78,15 @@ public final class ProtoParser {
                 expectSymbol(";");
             } else if (t.is(TokenType.IDENT, "import")) {
                 next();
-                if (peek().is(TokenType.IDENT, "public") || peek().is(TokenType.IDENT, "weak")) {
+                boolean reExported = peek().is(TokenType.IDENT, "public");
+                if (reExported || peek().is(TokenType.IDENT, "weak")) {
                     next();
                 }
-                imports.add(expect(TokenType.STRING).text());
+                String imported = expect(TokenType.STRING).text();
+                imports.add(imported);
+                if (reExported) {
+                    publicImports.add(imported);
+                }
                 expectSymbol(";");
             } else if (t.is(TokenType.IDENT, "option")) {
                 next();
@@ -101,7 +107,7 @@ public final class ProtoParser {
                     "missing 'syntax = \"proto3\";' declaration");
         }
 
-        ProtoFile file = new ProtoFile(fileName, syntax, protoPackage, imports, options);
+        ProtoFile file = new ProtoFile(fileName, syntax, protoPackage, imports, publicImports, options);
         file.messages().addAll(messages);
         file.enums().addAll(enums);
         return file;

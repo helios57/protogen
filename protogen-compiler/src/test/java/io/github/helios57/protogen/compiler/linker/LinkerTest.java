@@ -54,7 +54,7 @@ class LinkerTest {
     void resolvesQualifiedNestedTypeAcrossFiles() {
         Schema schema = link(
                 "syntax = \"proto3\";\npackage a;\nmessage Holder { enum Status { S = 0; } }\n",
-                "syntax = \"proto3\";\npackage a;\nmessage Use { Holder.Status status = 1; }\n");
+                "syntax = \"proto3\";\nimport \"file0.proto\";\npackage a;\nmessage Use { Holder.Status status = 1; }\n");
 
         Defs.FieldDef field = schema.files().get(1).messages().get(0).fields().get(0);
         assertThat(field.kind()).isEqualTo(Defs.Kind.ENUM);
@@ -65,10 +65,52 @@ class LinkerTest {
     void resolvesFullyQualifiedNameWithLeadingDot() {
         Schema schema = link(
                 "syntax = \"proto3\";\npackage a.b;\nmessage T { string s = 1; }\n",
-                "syntax = \"proto3\";\npackage c;\nmessage U { .a.b.T t = 1; }\n");
+                "syntax = \"proto3\";\nimport \"file0.proto\";\npackage c;\nmessage U { .a.b.T t = 1; }\n");
 
         assertThat(schema.files().get(1).messages().get(0).fields().get(0).resolved().fullName())
                 .isEqualTo("a.b.T");
+    }
+
+    @Test
+    void rejectsATypeFromAFileThatWasNeverImported() {
+        assertThatThrownBy(() -> link(
+                "syntax = \"proto3\";\npackage a;\nmessage T { string s = 1; }\n",
+                "syntax = \"proto3\";\npackage a;\nmessage U { T t = 1; }\n"))
+                .isInstanceOf(ProtoCompileException.class)
+                .hasMessageContaining("declared in file0.proto, which file1.proto does not import");
+    }
+
+    @Test
+    void anImportIsNotTransitiveUnlessItIsPublic() {
+        // file2 imports file1, which imports file0 - so file0's types stay out of reach
+        assertThatThrownBy(() -> link(
+                "syntax = \"proto3\";\npackage a;\nmessage T { string s = 1; }\n",
+                "syntax = \"proto3\";\nimport \"file0.proto\";\npackage a;\nmessage U { T t = 1; }\n",
+                "syntax = \"proto3\";\nimport \"file1.proto\";\npackage a;\nmessage V { T t = 1; }\n"))
+                .isInstanceOf(ProtoCompileException.class)
+                .hasMessageContaining("file2.proto does not import");
+    }
+
+    @Test
+    void importPublicReExportsWhatItImports() {
+        Schema schema = link(
+                "syntax = \"proto3\";\npackage a;\nmessage T { string s = 1; }\n",
+                "syntax = \"proto3\";\nimport public \"file0.proto\";\npackage a;\nmessage U { T t = 1; }\n",
+                "syntax = \"proto3\";\nimport \"file1.proto\";\npackage a;\nmessage V { T t = 1; }\n");
+
+        assertThat(schema.files().get(2).messages().get(0).fields().get(0).resolved().fullName())
+                .isEqualTo("a.T");
+    }
+
+    @Test
+    void anImportPathIsMatchedByItsFileName() {
+        // imports are written relative to the proto root, parsed files carry the name they were read under
+        Schema schema = link(
+                "syntax = \"proto3\";\npackage a;\nmessage T { string s = 1; }\n",
+                "syntax = \"proto3\";\nimport \"model/nested/file0.proto\";\npackage a;\nmessage U { T t = 1; }\n");
+
+        assertThat(schema.files().get(1).messages().get(0).fields().get(0).resolved().fullName())
+                .isEqualTo("a.T");
     }
 
     @Test

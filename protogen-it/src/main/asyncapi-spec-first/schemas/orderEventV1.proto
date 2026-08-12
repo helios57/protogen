@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package protogen.it.orders;
+
+option java_multiple_files = true;
+option java_package = "protogen.it.specfirst";
+
+// Pulled in transitively: nothing names this file except the import below.
+import "orderLineV1.proto";
+
+/*
+ * An order, as it goes over the wire.
+ *
+ * @RootNode
+ */
+message OrderEventV1 {
+
+  /*
+   * @MinLength 3
+   * @Example A-4711
+   */
+  string orderId = 1;
+
+  // @Required
+  string region = 2;
+
+  repeated OrderLineV1 lines = 3;
+}

@@ -5,10 +5,14 @@ import io.github.helios57.protogen.compiler.model.Defs;
 import io.github.helios57.protogen.compiler.model.ProtoFile;
 import io.github.helios57.protogen.compiler.model.ScalarType;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Builds the symbol table across all parsed files and resolves every field's type reference.
@@ -32,6 +36,9 @@ public final class Linker {
 
     private final Map<String, Defs.TypeDef> symbols = new LinkedHashMap<>();
 
+    /** Per file, the files whose types it may name: itself, its imports, and their {@code import public}s. */
+    private final Map<String, Set<String>> visibleFiles = new LinkedHashMap<>();
+
     /**
      * Links the given files into a resolved schema.
      *
@@ -49,12 +56,93 @@ public final class Linker {
                 register(e, null, file, scope);
             }
         }
+        computeVisibility(files);
         for (ProtoFile file : files) {
             for (Defs.MessageDef m : file.messages()) {
                 resolveMessage(m, file);
             }
         }
         return new Schema(List.copyOf(files), Map.copyOf(symbols));
+    }
+
+    /**
+     * Works out which files each file is allowed to name types from.
+     * <p>
+     * A file sees itself, everything it imports, and - transitively - everything those imports re-export
+     * with {@code import public}. An import naming a file that was not handed to the linker is simply not
+     * in the set: the reference it was meant to satisfy then fails to resolve on its own, which is a better
+     * diagnostic than complaining about the import.
+     *
+     * @param files the parsed files
+     */
+    private void computeVisibility(List<ProtoFile> files) {
+        Map<String, ProtoFile> byName = new LinkedHashMap<>();
+        for (ProtoFile file : files) {
+            byName.put(file.fileName(), file);
+        }
+        for (ProtoFile file : files) {
+            Set<String> visible = new LinkedHashSet<>();
+            visible.add(file.fileName());
+            Deque<String> pending = new ArrayDeque<>();
+            for (String imported : file.imports()) {
+                pending.add(imported);
+            }
+            while (!pending.isEmpty()) {
+                ProtoFile imported = resolveImport(pending.poll(), byName);
+                if (imported == null || !visible.add(imported.fileName())) {
+                    continue;
+                }
+                // only 'import public' travels one hop further; a plain import stops here
+                pending.addAll(imported.publicImports());
+            }
+            visibleFiles.put(file.fileName(), visible);
+        }
+    }
+
+    /**
+     * Matches an import path to a parsed file.
+     * <p>
+     * An import is written relative to the proto root ({@code model/common.proto}) while a parsed file
+     * carries the name it was read under, so the base names are compared when the full paths do not match.
+     *
+     * @param imported the import path as written
+     * @param byName   the parsed files by file name
+     * @return the file the import refers to, or {@code null} when it was not handed to the linker
+     */
+    private static ProtoFile resolveImport(String imported, Map<String, ProtoFile> byName) {
+        ProtoFile exact = byName.get(imported);
+        if (exact != null) {
+            return exact;
+        }
+        String base = baseName(imported);
+        for (ProtoFile candidate : byName.values()) {
+            if (baseName(candidate.fileName()).equals(base)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private static String baseName(String path) {
+        int slash = path.lastIndexOf('/');
+        return slash < 0 ? path : path.substring(slash + 1);
+    }
+
+    /**
+     * Rejects a type reference that reaches into a file the referencing file never imported.
+     *
+     * @param found the type that was resolved
+     * @param field the field naming it
+     * @param file  the file the field is declared in
+     */
+    private void assertImported(Defs.TypeDef found, Defs.FieldDef field, ProtoFile file) {
+        String declaredIn = found.file().fileName();
+        Set<String> visible = visibleFiles.get(file.fileName());
+        if (visible == null || visible.contains(declaredIn)) {
+            return;
+        }
+        throw new ProtoCompileException(field.pos(), "type '" + field.typeName() + "' is declared in "
+                + declaredIn + ", which " + file.fileName() + " does not import");
     }
 
     private void register(Defs.MessageDef message, Defs.MessageDef parent, ProtoFile file, String scope) {
@@ -184,6 +272,7 @@ public final class Linker {
         if (found instanceof Defs.MessageDef m && m.mapEntry()) {
             throw new ProtoCompileException(field.pos(), "cannot refer to a synthetic map entry type");
         }
+        assertImported(found, field, file);
         field.resolveType(found);
     }
 

@@ -12,12 +12,13 @@ public final class ProtoFile {
     private final String syntax;
     private final String protoPackage;
     private final List<String> imports;
+    private final List<String> publicImports;
     private final Map<String, String> options;
     private final List<Defs.MessageDef> messages = new ArrayList<>();
     private final List<Defs.EnumDef> enums = new ArrayList<>();
 
     /**
-     * Creates a parsed file. The declaration lists start empty and are filled by the parser.
+     * Creates a parsed file with no {@code import public} re-exports.
      *
      * @param fileName     the source file name, used in diagnostics and to derive the outer class
      * @param syntax       the declared syntax, {@code proto2} or {@code proto3}
@@ -27,10 +28,27 @@ public final class ProtoFile {
      */
     public ProtoFile(String fileName, String syntax, String protoPackage,
                      List<String> imports, Map<String, String> options) {
+        this(fileName, syntax, protoPackage, imports, List.of(), options);
+    }
+
+    /**
+     * Creates a parsed file. The declaration lists start empty and are filled by the parser.
+     *
+     * @param fileName      the source file name, used in diagnostics and to derive the outer class
+     * @param syntax        the declared syntax, {@code proto2} or {@code proto3}
+     * @param protoPackage  the declared package, or empty
+     * @param imports       imported file names, in declaration order
+     * @param publicImports the subset of {@code imports} declared {@code import public}, which a file
+     *                      importing this one also sees
+     * @param options       file-level options such as {@code java_package}
+     */
+    public ProtoFile(String fileName, String syntax, String protoPackage, List<String> imports,
+                     List<String> publicImports, Map<String, String> options) {
         this.fileName = fileName;
         this.syntax = syntax;
         this.protoPackage = protoPackage;
         this.imports = List.copyOf(imports);
+        this.publicImports = List.copyOf(publicImports);
         this.options = new LinkedHashMap<>(options);
     }
 
@@ -77,6 +95,15 @@ public final class ProtoFile {
      */
     public List<String> imports() {
         return imports;
+    }
+
+    /**
+     * The files this one re-exports, so that importing this file also makes their types visible.
+     *
+     * @return the {@code import public} file names, in declaration order
+     */
+    public List<String> publicImports() {
+        return publicImports;
     }
 
     /**

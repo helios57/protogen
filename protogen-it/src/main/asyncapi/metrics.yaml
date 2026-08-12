@@ -38,4 +38,4 @@ components:
       payload:
         schemaFormat: 'application/vnd.google.protobuf;version=3'
         schema:
-          $ref: kpiCollectionV1.proto
+          $ref: ../proto/kpiCollectionV1.proto

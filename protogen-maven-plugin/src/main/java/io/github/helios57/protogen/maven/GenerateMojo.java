@@ -23,7 +23,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.PathMatcher;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Stream;
 
 /**
@@ -148,28 +153,38 @@ public class GenerateMojo extends AbstractMojo {
     @Parameter(defaultValue = "${project}", readonly = true, required = true)
     MavenProject project;
 
+    /** Parsed schemas by absolute path: one file can be reached from the source root and from a payload ref. */
+    private final Map<Path, ProtoFile> parsed = new HashMap<>();
+
     @Override
     public void execute() throws MojoExecutionException {
         if (skip) {
             getLog().info("protogen: skipped");
             return;
         }
-        Path sourceRoot = protoSourceRoot.toPath();
-        List<Path> protoFiles = Files.isDirectory(sourceRoot) ? discover(sourceRoot) : List.of();
-        if (protoFiles.isEmpty()) {
-            getLog().info("protogen: no .proto files under " + sourceRoot);
-            // an AsyncAPI document stands on its own, so carry on rather than returning
-            scaffoldFromAsyncApi();
-            return;
-        }
-        getLog().info("protogen: " + protoFiles.size() + " .proto file(s) under " + sourceRoot);
-
         ProtoCompiler compiler = new ProtoCompiler(new ProtoCompiler.Options(javaPackage, emitJavadoc,
                 failOnUnsupported, preserveUnknownFields, emitValidation, emitSchemaMetadata));
 
+        List<Document> documents = readAsyncApiDocuments();
+        Path sourceRoot = protoSourceRoot.toPath();
+        Set<Path> protoFiles = new LinkedHashSet<>(Files.isDirectory(sourceRoot) ? discover(sourceRoot) : List.of());
+        int fromSourceRoot = protoFiles.size();
+        addProtosReferencedByAsyncApi(documents, protoFiles, compiler);
+
+        if (protoFiles.isEmpty()) {
+            getLog().info("protogen: no .proto files under " + sourceRoot);
+            // an AsyncAPI document stands on its own, so carry on rather than returning
+            scaffold(documents);
+            return;
+        }
+        getLog().info("protogen: " + fromSourceRoot + " .proto file(s) under " + sourceRoot
+                + (protoFiles.size() > fromSourceRoot
+                ? ", " + (protoFiles.size() - fromSourceRoot) + " more referenced by an AsyncAPI payload"
+                : ""));
+
         List<JavaGenerator.GeneratedFile> generated;
         try {
-            List<ProtoFile> parsed = compiler.parse(protoFiles);
+            List<ProtoFile> parsed = protoFiles.stream().map(p -> parse(p, compiler)).toList();
             for (ProtoFile file : parsed) {
                 getLog().info("  " + file.fileName() + " -> package " + file.javaPackage()
                         + " (" + (file.messages().size() + file.enums().size()) + " type(s))");
@@ -201,7 +216,7 @@ public class GenerateMojo extends AbstractMojo {
         }
         getLog().info("protogen: generated " + sources + " Java file(s) into " + sourceDir);
 
-        scaffoldFromAsyncApi();
+        scaffold(documents);
 
         project.addCompileSourceRoot(sourceDir.toString());
         if (resources > 0) {
@@ -212,24 +227,28 @@ public class GenerateMojo extends AbstractMojo {
         }
     }
 
+    /** An AsyncAPI document and where it was read from, which is what its payload refs resolve against. */
+    private record Document(Path path, AsyncApi api) {
+    }
+
     /**
-     * Reads the AsyncAPI documents, if any, and writes the scaffolding.
-     * <p>
-     * The output is never added as a source root: it is help, not a build artefact, and code the generator
-     * guessed at has no business compiling into the application by accident.
+     * Reads every AsyncAPI document under the configured root.
+     *
+     * @return the parsed documents, or empty when no root is configured
+     * @throws MojoExecutionException if a document is AsyncAPI but malformed
      */
-    private void scaffoldFromAsyncApi() throws MojoExecutionException {
+    private List<Document> readAsyncApiDocuments() throws MojoExecutionException {
         if (asyncApiSourceRoot == null) {
-            return;
+            return List.of();
         }
         Path root = asyncApiSourceRoot.toPath();
         if (!Files.isDirectory(root)) {
             getLog().info("protogen: no AsyncAPI source root at " + root + ", nothing to scaffold");
-            return;
+            return List.of();
         }
-        List<Path> documents;
+        List<Path> candidates;
         try (Stream<Path> walk = Files.walk(root)) {
-            documents = walk.filter(Files::isRegularFile)
+            candidates = walk.filter(Files::isRegularFile)
                     .filter(p -> {
                         String name = p.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
                         return name.endsWith(".yaml") || name.endsWith(".yml") || name.endsWith(".json");
@@ -240,22 +259,146 @@ public class GenerateMojo extends AbstractMojo {
             throw new MojoExecutionException("protogen: cannot scan " + root, e);
         }
 
-        AsyncApiEmitter.Options options = new AsyncApiEmitter.Options(
-                scaffoldChannels, scaffoldStubs, scaffoldBinderConfig, scaffoldNotes);
-        Path out = scaffoldOutputDirectory.toPath();
-        int written = 0;
-        for (Path document : documents) {
-            AsyncApi api;
+        List<Document> documents = new ArrayList<>();
+        for (Path candidate : candidates) {
             try {
-                api = AsyncApiParser.of(document).parse();
+                documents.add(new Document(candidate, AsyncApiParser.of(candidate).parse()));
             } catch (ProtoCompileException e) {
                 throw new MojoExecutionException(e.getMessage(), e);
             } catch (RuntimeException e) {
                 // a directory of yaml is rarely all AsyncAPI; anything else is simply not ours
-                getLog().debug("protogen: " + document.getFileName() + " is not an AsyncAPI document");
+                getLog().debug("protogen: " + candidate.getFileName() + " is not an AsyncAPI document");
+            }
+        }
+        return documents;
+    }
+
+    /**
+     * Adds the {@code .proto} files an AsyncAPI payload points at, so the models it describes are generated
+     * even when they live outside the proto source root - which is the normal case for a spec-first project
+     * where the document is the contract.
+     * <p>
+     * A payload ref is resolved next to its document first, then against the proto source root, then by
+     * file name anywhere under either. Whatever it pulls in brings its own imports along.
+     *
+     * @param documents  the parsed documents
+     * @param protoFiles the set to add to, in discovery order
+     * @param compiler   used to read the imports of the files that are pulled in
+     */
+    private void addProtosReferencedByAsyncApi(List<Document> documents, Set<Path> protoFiles,
+                                               ProtoCompiler compiler) throws MojoExecutionException {
+        for (Document document : documents) {
+            for (AsyncApi.Channel channel : document.api().channels()) {
+                for (AsyncApi.Message message : channel.messages()) {
+                    if (!message.isProtobuf()) {
+                        continue;
+                    }
+                    Path resolved = resolveProtoReference(message.protoFile(), document.path());
+                    if (resolved == null) {
+                        getLog().warn("protogen: " + document.path().getFileName() + " channel '"
+                                + channel.id() + "' refers to " + message.protoFile()
+                                + ", which is not under " + protoSourceRoot + " or next to the document"
+                                + " - no model generated for it");
+                        continue;
+                    }
+                    addWithImports(resolved, protoFiles, compiler);
+                }
+            }
+        }
+    }
+
+    /**
+     * Adds a schema and, transitively, everything it imports.
+     *
+     * @param proto      the schema to add
+     * @param protoFiles the set to add to
+     * @param compiler   used to read the file's imports
+     */
+    private void addWithImports(Path proto, Set<Path> protoFiles, ProtoCompiler compiler)
+            throws MojoExecutionException {
+        if (!protoFiles.add(proto.toAbsolutePath().normalize())) {
+            return;
+        }
+        ProtoFile parsed;
+        try {
+            parsed = parse(proto, compiler);
+        } catch (ProtoCompileException e) {
+            throw new MojoExecutionException(e.getMessage(), e);
+        }
+        for (String imported : parsed.imports()) {
+            if (imported.startsWith("google/protobuf/")) {
+                // the well-known types are mapped, not generated
                 continue;
             }
-            String targetPackage = scaffoldPackage != null ? scaffoldPackage : javaPackageOfFirstProto();
+            Path resolved = resolveProtoReference(imported, proto);
+            if (resolved != null) {
+                addWithImports(resolved, protoFiles, compiler);
+            } else {
+                getLog().warn("protogen: " + proto.getFileName() + " imports " + imported
+                        + ", which was not found - the reference it satisfies will fail to resolve");
+            }
+        }
+    }
+
+    /**
+     * Finds the file a payload ref or an import names.
+     *
+     * @param reference the path as written in the document or the import
+     * @param relativeTo the file the reference was written in
+     * @return the resolved schema, or {@code null} when there is no such file
+     */
+    private Path resolveProtoReference(String reference, Path relativeTo) {
+        String path = reference.startsWith("#") ? reference.substring(reference.indexOf('/') + 1) : reference;
+        Path sibling = relativeTo.toAbsolutePath().getParent().resolve(path).normalize();
+        if (Files.isRegularFile(sibling)) {
+            return sibling;
+        }
+        Path underSourceRoot = protoSourceRoot.toPath().resolve(path).normalize();
+        if (Files.isRegularFile(underSourceRoot)) {
+            return underSourceRoot;
+        }
+        String name = Path.of(path).getFileName().toString();
+        for (Path root : new Path[]{protoSourceRoot.toPath(),
+                asyncApiSourceRoot == null ? null : asyncApiSourceRoot.toPath()}) {
+            if (root == null || !Files.isDirectory(root)) {
+                continue;
+            }
+            try (Stream<Path> walk = Files.walk(root)) {
+                Optional<Path> found = walk.filter(Files::isRegularFile)
+                        .filter(p -> p.getFileName().toString().equals(name))
+                        .sorted()
+                        .findFirst();
+                if (found.isPresent()) {
+                    return found.get().toAbsolutePath().normalize();
+                }
+            } catch (IOException e) {
+                getLog().debug("protogen: cannot scan " + root + " for " + name);
+            }
+        }
+        return null;
+    }
+
+    /** Parses once per path, since a schema can be reached both from the source root and from a payload ref. */
+    private ProtoFile parse(Path proto, ProtoCompiler compiler) {
+        return parsed.computeIfAbsent(proto.toAbsolutePath().normalize(), compiler::parse);
+    }
+
+    /**
+     * Writes the scaffolding for the documents that were read.
+     * <p>
+     * The output is never added as a source root: it is help, not a build artefact, and code the generator
+     * guessed at has no business compiling into the application by accident.
+     *
+     * @param documents the parsed documents
+     */
+    private void scaffold(List<Document> documents) throws MojoExecutionException {
+        AsyncApiEmitter.Options options = new AsyncApiEmitter.Options(
+                scaffoldChannels, scaffoldStubs, scaffoldBinderConfig, scaffoldNotes);
+        Path out = scaffoldOutputDirectory.toPath();
+        int written = 0;
+        for (Document document : documents) {
+            AsyncApi api = document.api();
+            String targetPackage = scaffoldPackage != null ? scaffoldPackage : defaultScaffoldPackage();
             try {
                 for (JavaGenerator.GeneratedFile file : new AsyncApiEmitter(api, targetPackage, options).emit()) {
                     Path target = out.resolve(file.relativePath());
@@ -276,8 +419,15 @@ public class GenerateMojo extends AbstractMojo {
     }
 
     /** The scaffolding lands next to the messages unless told otherwise. */
-    private String javaPackageOfFirstProto() {
-        return javaPackage != null ? javaPackage : "protogen.scaffold";
+    private String defaultScaffoldPackage() {
+        if (javaPackage != null) {
+            return javaPackage;
+        }
+        return parsed.values().stream()
+                .map(ProtoFile::javaPackage)
+                .filter(p -> p != null && !p.isBlank())
+                .findFirst()
+                .orElse("protogen.scaffold");
     }
 
     private List<Path> discover(Path sourceRoot) throws MojoExecutionException {

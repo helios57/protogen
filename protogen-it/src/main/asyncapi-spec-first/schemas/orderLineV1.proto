@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package protogen.it.orders;
+
+option java_multiple_files = true;
+option java_package = "protogen.it.specfirst";
+
+// A single line of an order.
+message OrderLineV1 {
+
+  string sku = 1;
+
+  // @Minimum 1
+  int32 quantity = 2;
+
+  int64 unitPriceCents = 3;
+}

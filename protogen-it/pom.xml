@@ -121,6 +121,23 @@
                             <emitSchemaMetadata>false</emitSchemaMetadata>
                         </configuration>
                     </execution>
+                    <!--
+                      Spec-first: no proto source root at all, so every model here is generated because the
+                      document's payload points at it - and its imports come along.
+                    -->
+                    <execution>
+                        <id>generate-from-asyncapi</id>
+                        <goals>
+                            <goal>generate</goal>
+                        </goals>
+                        <configuration>
+                            <protoSourceRoot>${project.basedir}/src/main/asyncapi-proto</protoSourceRoot>
+                            <asyncApiSourceRoot>${project.basedir}/src/main/asyncapi-spec-first</asyncApiSourceRoot>
+                            <scaffoldOutputDirectory>${project.build.directory}/protogen-scaffold-orders</scaffoldOutputDirectory>
+                            <scaffoldPackage>protogen.it.specfirst.scaffold</scaffoldPackage>
+                            <emitSchemaMetadata>false</emitSchemaMetadata>
+                        </configuration>
+                    </execution>
                     <execution>
                         <id>generate-opt-ins</id>
                         <goals>
