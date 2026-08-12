@@ -661,13 +661,19 @@ final class CodecEmitter {
         out.blank();
         out.line("private final java.util.Map<K, V> m;");
         out.blank();
-        out.line("M(java.util.Map<K, V> m) {");
-        out.line("    this.m = m;");
+        out.javadoc("""
+                @param owned a map this object takes the only reference to""");
+        out.line("M(java.util.Map<K, V> owned) {");
+        out.line("    this.m = owned;");
         out.line("}");
         out.blank();
         out.line("@Override");
         out.line("public java.util.Set<Entry<K, V>> entrySet() {");
-        out.line("    return java.util.Collections.unmodifiableSet(m.entrySet());");
+        out.indent();
+        out.line("// through the whole map, not unmodifiableSet(m.entrySet()): that one still hands out");
+        out.line("// entries whose setValue writes straight through to the backing map");
+        out.line("return java.util.Collections.unmodifiableMap(m).entrySet();");
+        out.outdent();
         out.line("}");
         out.blank();
         out.line("@Override");

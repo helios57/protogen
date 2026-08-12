@@ -138,6 +138,29 @@ class CollectionsRoundTripTest {
     }
 
     @Test
+    void aMapEntryCannotBeWrittenThroughEither() {
+        // a parsed map is handed over rather than copied, so it has to be unmodifiable the whole way down:
+        // Entry.setValue writes straight through an entry set that was only wrapped one level deep
+        NodeV1 message = NodeV1.parseFrom(
+                new NodeV1("n", null, null, null, null, null, Map.of("k", "v"), null, null, null, null)
+                        .toByteArray());
+
+        assertThatThrownBy(() -> message.endpoints().entrySet().iterator().next().setValue("other"))
+                .isInstanceOf(UnsupportedOperationException.class);
+        assertThat(message.endpoints()).containsExactly(java.util.Map.entry("k", "v"));
+    }
+
+    @Test
+    void aMapPassedInIsCopiedRatherThanHeld() {
+        java.util.Map<String, String> mutable = new java.util.LinkedHashMap<>(Map.of("k", "v"));
+        NodeV1 message = new NodeV1("n", null, null, null, null, null, mutable, null, null, null, null);
+
+        mutable.put("added", "later");
+
+        assertThat(message.endpoints()).containsExactly(java.util.Map.entry("k", "v"));
+    }
+
+    @Test
     void nullCollectionsAreNormalisedToEmptyOnes() {
         NodeV1 message = new NodeV1("n", null, null, null, null, null, null, null, null, null, null);
 
