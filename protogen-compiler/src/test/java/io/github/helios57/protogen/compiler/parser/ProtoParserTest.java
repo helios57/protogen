@@ -183,10 +183,90 @@ class ProtoParserTest {
     }
 
     @Test
-    void rejectsProto2() {
-        assertThatThrownBy(() -> parse("syntax = \"proto2\";\n"))
+    void acceptsProto2() {
+        ProtoFile file = parse("""
+                syntax = "proto2";
+                package a;
+                message M {
+                  required string id = 1;
+                  optional int32 count = 2 [default = 7];
+                  repeated string tags = 3 [packed = false];
+                }
+                """);
+
+        assertThat(file.syntax()).isEqualTo("proto2");
+        assertThat(file.proto3()).isFalse();
+        Defs.MessageDef m = file.messages().get(0);
+        assertThat(field(m, "id").label()).isEqualTo(Defs.Label.REQUIRED);
+        assertThat(field(m, "count").defaultLiteral()).isEqualTo("7");
+        assertThat(field(m, "tags").packedOverride()).isFalse();
+    }
+
+    @Test
+    void rejectsAnUnknownSyntax() {
+        assertThatThrownBy(() -> parse("syntax = \"proto4\";\n"))
                 .isInstanceOf(ProtoCompileException.class)
-                .hasMessageContaining("only proto3 is supported");
+                .hasMessageContaining("only proto2 and proto3 are supported");
+    }
+
+    @Test
+    void proto2EnumNeedsNoZeroValue() {
+        ProtoFile file = parse("syntax = \"proto2\";\nenum E { A = 1; B = 2; }\n");
+
+        assertThat(file.enums().get(0).values()).hasSize(2);
+    }
+
+    @Test
+    void parsesFieldOptionsInsteadOfSwallowingThem() {
+        Defs.MessageDef m = parse("""
+                syntax = "proto3";
+                message M {
+                  repeated int32 v = 1 [packed = false, deprecated = true];
+                  string s = 2 [json_name = "sName"];
+                }
+                """).messages().get(0);
+
+        assertThat(field(m, "v").packedOverride()).isFalse();
+        assertThat(field(m, "v").deprecated()).isTrue();
+        assertThat(field(m, "s").options()).containsEntry("json_name", "sName");
+    }
+
+    @Test
+    void parsesReservedRangesAndNames() {
+        Defs.MessageDef m = parse("""
+                syntax = "proto3";
+                message M {
+                  reserved 2, 15, 9 to 11;
+                  reserved "old_field";
+                  string s = 1;
+                }
+                """).messages().get(0);
+
+        assertThat(m.reservedRanges()).hasSize(3);
+        assertThat(m.reservedRanges().get(2)).containsExactly(9, 11);
+        assertThat(m.reservedNames()).containsExactly("old_field");
+    }
+
+    @Test
+    void parsesExtensionRanges() {
+        Defs.MessageDef m = parse("""
+                syntax = "proto2";
+                message M {
+                  optional string s = 1;
+                  extensions 100 to 199;
+                }
+                """).messages().get(0);
+
+        assertThat(m.extensionRanges()).hasSize(1);
+        assertThat(m.extensionRanges().get(0)).containsExactly(100, 199);
+    }
+
+    @Test
+    void groupsAreRejectedWithAHint() {
+        assertThatThrownBy(() -> parse(
+                "syntax = \"proto2\";\nmessage M { optional group G = 1 { optional string s = 2; } }\n"))
+                .isInstanceOf(ProtoCompileException.class)
+                .hasMessageContaining("declare a nested message instead");
     }
 
     @Test

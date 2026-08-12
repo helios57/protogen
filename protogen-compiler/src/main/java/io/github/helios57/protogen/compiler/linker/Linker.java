@@ -70,6 +70,7 @@ public final class Linker {
     }
 
     private void register(Defs.EnumDef def, Defs.MessageDef parent, ProtoFile file, String scope) {
+        assertNotReserved(def);
         String fullName = scope.isEmpty() ? def.name() : scope + "." + def.name();
         def.link(parent, file, fullName);
         putSymbol(fullName, def, def.pos().toString());
@@ -106,6 +107,38 @@ public final class Linker {
             }
             seen.add(f.number());
         }
+        assertNotReserved(message);
+    }
+
+    /** A reserved number or name records a past mistake; reusing it silently would repeat it. */
+    private void assertNotReserved(Defs.MessageDef message) {
+        for (Defs.FieldDef f : message.fields()) {
+            for (int[] range : message.reservedRanges()) {
+                if (f.number() >= range[0] && f.number() <= range[1]) {
+                    throw new ProtoCompileException(f.pos(), "field number " + f.number()
+                            + " is reserved in message '" + message.name() + "'");
+                }
+            }
+            if (message.reservedNames().contains(f.name())) {
+                throw new ProtoCompileException(f.pos(), "field name '" + f.name()
+                        + "' is reserved in message '" + message.name() + "'");
+            }
+        }
+    }
+
+    private void assertNotReserved(Defs.EnumDef def) {
+        for (Defs.EnumValueDef v : def.values()) {
+            for (int[] range : def.reservedRanges()) {
+                if (v.number() >= range[0] && v.number() <= range[1]) {
+                    throw new ProtoCompileException(def.pos(), "enum value " + v.number()
+                            + " is reserved in enum '" + def.name() + "'");
+                }
+            }
+            if (def.reservedNames().contains(v.name())) {
+                throw new ProtoCompileException(def.pos(), "enum constant '" + v.name()
+                        + "' is reserved in enum '" + def.name() + "'");
+            }
+        }
     }
 
     private void resolveMapField(Defs.FieldDef field, Defs.MessageDef scope, ProtoFile file) {
@@ -124,6 +157,7 @@ public final class Linker {
     }
 
     private void resolve(Defs.FieldDef field, Defs.MessageDef scope, ProtoFile file) {
+        field.linkFile(file);
         String typeName = field.typeName();
 
         ScalarType scalar = ScalarType.byProtoName(typeName);

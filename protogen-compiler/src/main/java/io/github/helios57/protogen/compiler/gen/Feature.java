@@ -224,9 +224,20 @@ public enum Feature {
      * @return whether the field is packed on the wire
      */
     public static boolean isPacked(Defs.FieldDef field) {
-        return field.repeated()
-                && (field.kind() == Defs.Kind.ENUM
+        if (!field.repeated()) {
+            return false;
+        }
+        boolean packable = field.kind() == Defs.Kind.ENUM
                 || field.kind() == Defs.Kind.TIMESTAMP
-                || (field.kind() == Defs.Kind.SCALAR && field.scalar().packable()));
+                || (field.kind() == Defs.Kind.SCALAR && field.scalar().packable());
+        if (!packable) {
+            return false;
+        }
+        // [packed = ...] wins over the syntax default, in both directions
+        Boolean explicit = field.packedOverride();
+        if (explicit != null) {
+            return explicit;
+        }
+        return field.file() == null || field.file().proto3();
     }
 }

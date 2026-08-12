@@ -87,6 +87,7 @@ final class MessageEmitter {
 
         emitPatternConstants(out, fields);
         emitCompactConstructor(out, message, fields);
+        emitDefaultAccessors(out, fields);
         emitOneofAccessors(out, message, fields);
 
         for (Defs.EnumDef nested : message.nestedEnums()) {
@@ -219,8 +220,9 @@ final class MessageEmitter {
             String u = unknownComponent();
             body.add(u + " = " + u + " == null ? new byte[0] : " + u + ".clone();");
         }
-        // a oneof invariant is structural, not schema validation, so it is never switched off
-        List<String> checks = new ArrayList<>(oneofChecks(message, fields));
+        // structural invariants, never switched off by the validation flag
+        List<String> checks = new ArrayList<>(requiredChecks(fields));
+        checks.addAll(oneofChecks(message, fields));
         List<String> schemaChecks = options.emitValidation()
                 ? validationChecks(message, fields)
                 : List.of();
@@ -256,6 +258,24 @@ final class MessageEmitter {
     }
 
     // ------------------------------------------------------------ validation
+
+    /**
+     * proto2 {@code required} fields must be present. This is a schema invariant rather than a declared
+     * constraint, so it holds regardless of the validation switch - a message missing one is not a valid
+     * instance of its own schema and could not be re-encoded faithfully.
+     */
+    private List<String> requiredChecks(List<Defs.FieldDef> fields) {
+        List<String> checks = new ArrayList<>();
+        for (Defs.FieldDef f : fields) {
+            if (f.label() != Defs.Label.REQUIRED || !Types.nullable(f)) {
+                continue;
+            }
+            String n = Names.fieldName(f.name());
+            checks.add("if (" + n + " == null) {\n    throw new IllegalArgumentException(\""
+                    + n + " is required\");\n}");
+        }
+        return checks;
+    }
 
     /** At most one member of a oneof may be set, so an invalid combination cannot be constructed. */
     private List<String> oneofChecks(Defs.MessageDef message, List<Defs.FieldDef> fields) {
@@ -404,6 +424,46 @@ final class MessageEmitter {
     }
 
     // ---------------------------------------------------------------- oneof
+
+    /**
+     * proto2 {@code [default = ...]} without losing presence: the component stays nullable, so "unset" is
+     * still distinguishable, and this accessor supplies the declared default when it is.
+     */
+    private void emitDefaultAccessors(Java out, List<Defs.FieldDef> fields) {
+        for (Defs.FieldDef f : fields) {
+            String literal = f.defaultLiteral();
+            if (literal == null || !Types.nullable(f) || f.repeated()) {
+                continue;
+            }
+            String n = Names.fieldName(f.name());
+            String type = Types.boxedElementType(f, javaPackage);
+            out.blank();
+            if (emitJavadoc) {
+                out.javadoc("The value, or the schema's declared default when it is unset.\n\n"
+                        + "@return {@code " + n + "} if present, else " + Java.literal(literal));
+            }
+            out.line("public " + type + " " + n + "OrDefault() {");
+            out.line("    return " + n + " != null ? " + n + " : " + defaultLiteralExpr(f, literal) + ";");
+            out.line("}");
+        }
+    }
+
+    /** Renders a proto2 default literal as a Java expression of the field's type. */
+    private String defaultLiteralExpr(Defs.FieldDef f, String literal) {
+        return switch (f.kind()) {
+            case SCALAR -> switch (f.scalar()) {
+                case STRING -> Java.literal(literal);
+                case BYTES -> "new byte[0]";
+                case BOOL -> Boolean.parseBoolean(literal) ? "Boolean.TRUE" : "Boolean.FALSE";
+                case DOUBLE -> literal + "D";
+                case FLOAT -> literal + "F";
+                case INT64, UINT64, SINT64, FIXED64, SFIXED64 -> literal + "L";
+                default -> literal;
+            };
+            case ENUM -> Types.javaName(f.resolved(), javaPackage) + "." + Names.escape(literal);
+            default -> "null";
+        };
+    }
 
     private void emitOneofAccessors(Java out, Defs.MessageDef message, List<Defs.FieldDef> fields) {
         for (int i = 0; i < message.oneofs().size(); i++) {
@@ -797,6 +857,9 @@ final class MessageEmitter {
     /** The condition under which a singular field is written at all. */
     private String presenceCondition(Defs.FieldDef f) {
         String n = Names.fieldName(f.name());
+        if (Types.alwaysWritten(f)) {
+            return "true";
+        }
         if (Types.nullable(f)) {
             return n + " != null";
         }

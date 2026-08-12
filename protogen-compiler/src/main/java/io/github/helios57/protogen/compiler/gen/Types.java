@@ -79,8 +79,7 @@ final class Types {
         if (field.repeated()) {
             return "java.util.List<" + boxedElementType(field, currentPackage) + ">";
         }
-        boolean nullable = field.label() == Defs.Label.OPTIONAL || field.inOneof();
-        if (nullable) {
+        if (nullable(field)) {
             return boxedElementType(field, currentPackage);
         }
         return switch (field.kind()) {
@@ -103,8 +102,7 @@ final class Types {
 
     /** The value a singular field holds when absent, as a Java expression. */
     static String defaultExpr(Defs.FieldDef field, String currentPackage) {
-        if (field.kind() == Defs.Kind.MAP || field.repeated()
-                || field.label() == Defs.Label.OPTIONAL || field.inOneof()) {
+        if (field.kind() == Defs.Kind.MAP || field.repeated() || nullable(field)) {
             return "null";
         }
         return switch (field.kind()) {
@@ -129,7 +127,24 @@ final class Types {
         if (field.label() == Defs.Label.OPTIONAL || field.inOneof()) {
             return true;
         }
+        // proto2 required is the one label that guarantees a scalar is there
+        if (field.label() == Defs.Label.REQUIRED) {
+            return field.kind() == Defs.Kind.MESSAGE || field.kind() == Defs.Kind.TIMESTAMP;
+        }
         return field.kind() == Defs.Kind.MESSAGE || field.kind() == Defs.Kind.TIMESTAMP;
+    }
+
+    /**
+     * Whether the field goes on the wire unconditionally.
+     * <p>
+     * proto2 {@code required} must be transmitted even at its default, or the message is invalid for the
+     * peer that reads it.
+     *
+     * @param field the field to classify
+     * @return whether presence is unconditional
+     */
+    static boolean alwaysWritten(Defs.FieldDef field) {
+        return field.label() == Defs.Label.REQUIRED && !nullable(field);
     }
 
 }

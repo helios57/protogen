@@ -22,9 +22,14 @@ import java.util.Map;
  */
 public final class ProtoParser {
 
+    /** The largest field number protobuf allows. */
+    private static final int MAX_FIELD_NUMBER = 536_870_911;
+
     private final List<Token> tokens;
     private final String fileName;
     private int pos;
+    /** Set as soon as the syntax statement is read; decides presence and enum rules below. */
+    private boolean proto3 = true;
 
     /**
      * Creates a parser over one schema source.
@@ -60,9 +65,11 @@ public final class ProtoParser {
                 next();
                 expectSymbol("=");
                 syntax = expect(TokenType.STRING).text();
-                if (!"proto3".equals(syntax)) {
-                    throw new ProtoCompileException(t.pos(), "only proto3 is supported, found '" + syntax + "'");
+                if (!"proto3".equals(syntax) && !"proto2".equals(syntax)) {
+                    throw new ProtoCompileException(t.pos(),
+                            "only proto2 and proto3 are supported, found '" + syntax + "'");
                 }
+                proto3 = "proto3".equals(syntax);
                 expectSymbol(";");
             } else if (t.is(TokenType.IDENT, "package")) {
                 next();
@@ -119,7 +126,9 @@ public final class ProtoParser {
             } else if (t.is(TokenType.IDENT, "oneof")) {
                 parseOneof(message);
             } else if (t.is(TokenType.IDENT, "reserved")) {
-                skipReserved();
+                parseReserved(message.reservedRanges(), message.reservedNames());
+            } else if (t.is(TokenType.IDENT, "extensions")) {
+                parseExtensions(message.extensionRanges());
             } else if (t.is(TokenType.IDENT, "option")) {
                 next();
                 readOptionName();
@@ -171,9 +180,13 @@ public final class ProtoParser {
             next();
             label = Defs.Label.OPTIONAL;
         } else if (first.is(TokenType.IDENT, "required")) {
-            throw new ProtoCompileException(first.pos(), "'required' is proto2 only");
-        } else if (first.is(TokenType.IDENT, "group")) {
-            throw new ProtoCompileException(first.pos(), "groups are not supported");
+            next();
+            label = Defs.Label.REQUIRED;
+        }
+        // 'group' may follow a label, so it has to be checked after the label is consumed
+        if (peek().is(TokenType.IDENT, "group")) {
+            throw new ProtoCompileException(peek().pos(),
+                    "groups are not supported; declare a nested message instead");
         }
 
         String typeName;
@@ -198,11 +211,11 @@ public final class ProtoParser {
         expectSymbol("=");
         Token numberToken = expect(TokenType.INT);
         int number = parseFieldNumber(numberToken);
-        skipFieldOptions();
+        Map<String, String> fieldOptions = parseFieldOptions();
         expectSymbol(";");
 
         Defs.FieldDef field = new Defs.FieldDef(nameToken.text(), number, label, typeName,
-                comment != null ? comment : nameToken.comment(), nameToken.pos(), oneofIndex);
+                comment != null ? comment : nameToken.comment(), nameToken.pos(), oneofIndex, fieldOptions);
         if (mapKeyType != null) {
             Defs.FieldDef key = new Defs.FieldDef("key", 1, Defs.Label.SINGULAR, mapKeyType, null,
                     nameToken.pos(), -1);
@@ -242,7 +255,7 @@ public final class ProtoParser {
             if (t.is(TokenType.SYMBOL, ";")) {
                 next();
             } else if (t.is(TokenType.IDENT, "reserved")) {
-                skipReserved();
+                parseReserved(def.reservedRanges(), def.reservedNames());
             } else if (t.is(TokenType.IDENT, "option")) {
                 next();
                 String name = readOptionName();
@@ -268,16 +281,19 @@ public final class ProtoParser {
                     throw new ProtoCompileException(numberToken.pos(),
                             "invalid enum value '" + numberToken.text() + "'");
                 }
-                skipFieldOptions();
+                parseFieldOptions();
                 expectSymbol(";");
                 def.values().add(new Defs.EnumValueDef(valueName.text(), negative ? -number : number,
                         valueName.comment()));
             }
         }
         expectSymbol("}");
-        if (def.defaultValue() == null || def.defaultValue().number() != 0) {
+        if (proto3 && (def.defaultValue() == null || def.defaultValue().number() != 0)) {
             throw new ProtoCompileException(def.pos(),
                     "proto3 enum '" + def.name() + "' must define a constant with value 0");
+        }
+        if (def.values().isEmpty()) {
+            throw new ProtoCompileException(def.pos(), "enum '" + def.name() + "' has no constants");
         }
         if (!def.allowAlias()) {
             List<Integer> seen = new ArrayList<>();
@@ -292,35 +308,98 @@ public final class ProtoParser {
         return def;
     }
 
-    /** Consumes {@code reserved 1, 2 to 5;} and {@code reserved "a", "b";}. Ranges are not enforced yet. */
-    private void skipReserved() {
+    /**
+     * Parses {@code reserved 1, 2 to 5, 9 to max;} and {@code reserved "a", "b";}.
+     *
+     * @param ranges collects the inclusive number ranges
+     * @param names  collects the reserved names
+     */
+    private void parseReserved(List<int[]> ranges, List<String> names) {
         expectIdent("reserved");
-        while (!peek().is(TokenType.SYMBOL, ";")) {
-            if (peek().is(TokenType.EOF)) {
-                throw new ProtoCompileException(peek().pos(), "unterminated reserved statement");
+        while (true) {
+            Token t = peek();
+            if (t.is(TokenType.STRING)) {
+                names.add(next().text());
+            } else if (t.is(TokenType.INT)) {
+                int from = parseRangeBound(next());
+                int to = from;
+                if (peek().is(TokenType.IDENT, "to")) {
+                    next();
+                    to = peek().is(TokenType.IDENT, "max") ? maxOf(next()) : parseRangeBound(next());
+                }
+                ranges.add(new int[]{from, to});
+            } else {
+                throw new ProtoCompileException(t.pos(),
+                        "expected a field number or name in 'reserved' but found '" + t.text() + "'");
             }
-            next();
-        }
-        expectSymbol(";");
-    }
-
-    /** Consumes an optional {@code [ ... ]} block; protogen has no field options of its own yet. */
-    private void skipFieldOptions() {
-        if (!peek().is(TokenType.SYMBOL, "[")) {
+            if (peek().is(TokenType.SYMBOL, ",")) {
+                next();
+                continue;
+            }
+            expectSymbol(";");
             return;
         }
+    }
+
+    /** Parses {@code extensions 100 to 199;}, the proto2 way of declaring a message open for extension. */
+    private void parseExtensions(List<int[]> ranges) {
+        expectIdent("extensions");
+        while (true) {
+            int from = parseRangeBound(expect(TokenType.INT));
+            int to = from;
+            if (peek().is(TokenType.IDENT, "to")) {
+                next();
+                to = peek().is(TokenType.IDENT, "max") ? maxOf(next()) : parseRangeBound(expect(TokenType.INT));
+            }
+            ranges.add(new int[]{from, to});
+            if (peek().is(TokenType.SYMBOL, ",")) {
+                next();
+                continue;
+            }
+            // an extensions statement may carry its own options, which protogen does not interpret
+            if (peek().is(TokenType.SYMBOL, "[")) {
+                parseFieldOptions();
+            }
+            expectSymbol(";");
+            return;
+        }
+    }
+
+    private int parseRangeBound(Token token) {
+        try {
+            return Integer.parseInt(token.text());
+        } catch (NumberFormatException e) {
+            throw new ProtoCompileException(token.pos(), "invalid field number '" + token.text() + "'");
+        }
+    }
+
+    private int maxOf(Token token) {
+        return MAX_FIELD_NUMBER;
+    }
+
+    /**
+     * Parses an optional {@code [name = value, ...]} block.
+     * <p>
+     * The values that change the wire format or the generated code - {@code packed}, {@code default},
+     * {@code deprecated} - are kept and acted on. Custom options in parentheses are recorded under their
+     * parenthesised name so nothing is silently lost, but they are not interpreted.
+     */
+    private Map<String, String> parseFieldOptions() {
+        if (!peek().is(TokenType.SYMBOL, "[")) {
+            return Map.of();
+        }
         next();
-        int depth = 1;
-        while (depth > 0) {
-            Token t = next();
-            if (t.is(TokenType.EOF)) {
-                throw new ProtoCompileException(t.pos(), "unterminated field options");
+        Map<String, String> options = new LinkedHashMap<>();
+        while (true) {
+            String name = readOptionName();
+            expectSymbol("=");
+            options.put(name, readOptionValue());
+            if (peek().is(TokenType.SYMBOL, ",")) {
+                next();
+                continue;
             }
-            if (t.is(TokenType.SYMBOL, "[")) {
-                depth++;
-            } else if (t.is(TokenType.SYMBOL, "]")) {
-                depth--;
-            }
+            expectSymbol("]");
+            return options;
         }
     }
 

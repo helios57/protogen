@@ -20,7 +20,7 @@ public final class ProtoFile {
      * Creates a parsed file. The declaration lists start empty and are filled by the parser.
      *
      * @param fileName     the source file name, used in diagnostics and to derive the outer class
-     * @param syntax       the declared syntax, always {@code proto3} here
+     * @param syntax       the declared syntax, {@code proto2} or {@code proto3}
      * @param protoPackage the declared package, or empty
      * @param imports      imported file names, in declaration order
      * @param options      file-level options such as {@code java_package}
@@ -41,6 +41,15 @@ public final class ProtoFile {
      */
     public String fileName() {
         return fileName;
+    }
+
+    /**
+     * Whether the file declares proto3, which changes presence rules and default packing.
+     *
+     * @return whether the syntax is proto3
+     */
+    public boolean proto3() {
+        return "proto3".equals(syntax);
     }
 
     /**

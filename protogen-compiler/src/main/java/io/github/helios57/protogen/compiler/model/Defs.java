@@ -4,6 +4,7 @@ import io.github.helios57.protogen.compiler.SourcePos;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * The declaration tree of a parsed {@code .proto} file.
@@ -54,7 +55,12 @@ public final class Defs {
         /** Explicit presence via the proto3 {@code optional} keyword. */
         OPTIONAL,
         /** A list of values, packed on the wire where the element type allows it. */
-        REPEATED
+        REPEATED,
+        /**
+         * proto2's {@code required}. Enforced on construction and on parse, because a message missing one
+         * is not a valid instance of its own schema.
+         */
+        REQUIRED
     }
 
     /** How a field's Java type is realised, once the type reference has been linked. */
@@ -88,6 +94,9 @@ public final class Defs {
         private String fullName;
         /** Set for the synthetic entry message of a {@code map} field; such messages are not generated. */
         private boolean mapEntry;
+        private final List<int[]> reservedRanges = new ArrayList<>();
+        private final List<String> reservedNames = new ArrayList<>();
+        private final List<int[]> extensionRanges = new ArrayList<>();
 
         /**
          * Creates an unlinked message; the linker fills in the parent, file and fully qualified name.
@@ -185,6 +194,33 @@ public final class Defs {
             return mapEntry;
         }
 
+        /**
+         * Reserved field-number ranges, each an inclusive {@code {from, to}} pair.
+         *
+         * @return the reserved ranges
+         */
+        public List<int[]> reservedRanges() {
+            return reservedRanges;
+        }
+
+        /**
+         * Reserved field names.
+         *
+         * @return the reserved names
+         */
+        public List<String> reservedNames() {
+            return reservedNames;
+        }
+
+        /**
+         * Proto2 {@code extensions} ranges, each an inclusive {@code {from, to}} pair.
+         *
+         * @return the ranges declared open for extension
+         */
+        public List<int[]> extensionRanges() {
+            return extensionRanges;
+        }
+
         /** Marks this message as the synthetic entry type of a map field. */
         public void markMapEntry() {
             this.mapEntry = true;
@@ -210,6 +246,8 @@ public final class Defs {
         private final String comment;
         private final SourcePos pos;
         private final List<EnumValueDef> values = new ArrayList<>();
+        private final List<int[]> reservedRanges = new ArrayList<>();
+        private final List<String> reservedNames = new ArrayList<>();
         private boolean allowAlias;
         private MessageDef parent;
         private ProtoFile file;
@@ -273,6 +311,24 @@ public final class Defs {
          */
         public List<EnumValueDef> values() {
             return values;
+        }
+
+        /**
+         * Reserved value ranges, each an inclusive {@code {from, to}} pair.
+         *
+         * @return the reserved ranges
+         */
+        public List<int[]> reservedRanges() {
+            return reservedRanges;
+        }
+
+        /**
+         * Reserved constant names.
+         *
+         * @return the reserved names
+         */
+        public List<String> reservedNames() {
+            return reservedNames;
         }
 
         /**
@@ -386,8 +442,11 @@ public final class Defs {
         private final SourcePos pos;
         private final Constraints constraints;
         private final int oneofIndex;
+        /** Field options as written, e.g. {@code packed}, {@code deprecated}, {@code json_name}. */
+        private final Map<String, String> options;
 
         // resolved by the linker
+        private ProtoFile file;
         private Kind kind;
         private ScalarType scalar;
         private TypeDef resolved;
@@ -407,6 +466,23 @@ public final class Defs {
          */
         public FieldDef(String name, int number, Label label, String typeName, String comment,
                         SourcePos pos, int oneofIndex) {
+            this(name, number, label, typeName, comment, pos, oneofIndex, Map.of());
+        }
+
+        /**
+         * Creates an unresolved field carrying its declared options.
+         *
+         * @param name       the declared name
+         * @param number     the wire field number
+         * @param label      the cardinality
+         * @param typeName   the type as written, resolved later
+         * @param comment    the leading comment, source of Javadoc and constraints
+         * @param pos        where it was declared, for diagnostics
+         * @param oneofIndex index into the message's oneof list, or {@code -1}
+         * @param options    the field options as written
+         */
+        public FieldDef(String name, int number, Label label, String typeName, String comment,
+                        SourcePos pos, int oneofIndex, Map<String, String> options) {
             this.name = name;
             this.number = number;
             this.label = label;
@@ -415,6 +491,62 @@ public final class Defs {
             this.pos = pos;
             this.constraints = Constraints.parse(comment);
             this.oneofIndex = oneofIndex;
+            this.options = Map.copyOf(options);
+        }
+
+        /**
+         * The file this field was declared in, which decides the default packing.
+         *
+         * @return the declaring file, or {@code null} before linking
+         */
+        public ProtoFile file() {
+            return file;
+        }
+
+        /**
+         * Records the declaring file.
+         *
+         * @param file the file this field belongs to
+         */
+        public void linkFile(ProtoFile file) {
+            this.file = file;
+        }
+
+        /**
+         * The field options as written in the schema.
+         *
+         * @return the options by name, e.g. {@code packed} or {@code deprecated}
+         */
+        public Map<String, String> options() {
+            return options;
+        }
+
+        /**
+         * Whether {@code [packed = ...]} overrides the default packing for this field.
+         *
+         * @return the explicit setting, or {@code null} when the schema did not say
+         */
+        public Boolean packedOverride() {
+            String packed = options.get("packed");
+            return packed == null ? null : Boolean.valueOf(packed);
+        }
+
+        /**
+         * The proto2 {@code [default = ...]} literal.
+         *
+         * @return the default as written, or {@code null} for none
+         */
+        public String defaultLiteral() {
+            return options.get("default");
+        }
+
+        /**
+         * Whether the schema marks this field {@code [deprecated = true]}.
+         *
+         * @return whether to emit {@code @Deprecated}
+         */
+        public boolean deprecated() {
+            return Boolean.parseBoolean(options.get("deprecated"));
         }
 
         /**
