@@ -16,7 +16,12 @@ public final class JavaGenerator {
         /** Java source, compiled into the project. */
         SOURCE,
         /** A resource packaged into the artifact, such as the schema metadata sidecar. */
-        RESOURCE
+        RESOURCE,
+        /**
+         * Scaffolding: a starting point to read, adapt and copy where you want it. Written to a throwaway
+         * directory and never compiled, because generated guesses have no business in a live source tree.
+         */
+        SCAFFOLD
     }
 
     /**

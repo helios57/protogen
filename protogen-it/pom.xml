@@ -108,6 +108,19 @@
                       they work. A second source root keeps them independent of the default one, since a
                       schema cannot be generated both ways into the same package.
                     -->
+                    <!-- AsyncAPI scaffolding: opt-in, written to a throwaway directory, never compiled -->
+                    <execution>
+                        <id>scaffold-asyncapi</id>
+                        <goals>
+                            <goal>generate</goal>
+                        </goals>
+                        <configuration>
+                            <protoSourceRoot>${project.basedir}/src/main/asyncapi-proto</protoSourceRoot>
+                            <asyncApiSourceRoot>${project.basedir}/src/main/asyncapi</asyncApiSourceRoot>
+                            <scaffoldPackage>protogen.it.scaffold</scaffoldPackage>
+                            <emitSchemaMetadata>false</emitSchemaMetadata>
+                        </configuration>
+                    </execution>
                     <execution>
                         <id>generate-opt-ins</id>
                         <goals>

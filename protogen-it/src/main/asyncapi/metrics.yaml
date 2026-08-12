@@ -1,0 +1,41 @@
+asyncapi: 3.0.0
+info:
+  title: Example Metrics
+  version: 1.0.0
+defaultContentType: application/gzip-protobuf
+channels:
+  incremental:
+    address: example/metric/incremental/{tenant}/{stage}
+    description: Incremental KPI updates.
+    parameters:
+      tenant:
+        description: owning tenant
+      stage:
+        enum: [dev, int, prod]
+    messages:
+      incremental:
+        $ref: '#/components/messages/MetricBatch'
+  control:
+    address: example/metric/control
+    description: Control channel, no parameters.
+    messages:
+      control:
+        $ref: '#/components/messages/MetricBatch'
+operations:
+  publishIncremental:
+    action: send
+    channel:
+      $ref: '#/channels/incremental'
+  readControl:
+    action: receive
+    channel:
+      $ref: '#/channels/control'
+components:
+  messages:
+    MetricBatch:
+      description: A batch of KPIs.
+      contentType: application/gzip-protobuf
+      payload:
+        schemaFormat: 'application/vnd.google.protobuf;version=3'
+        schema:
+          $ref: kpiCollectionV1.proto
