@@ -60,7 +60,7 @@
         <assertj.version>3.27.7</assertj.version>
         <snakeyaml.version>2.6</snakeyaml.version>
         <!-- test-scope oracle ONLY - must never reach a compile classpath, see PLAN.md I2/I3 -->
-        <protobuf-java.version>4.35.1</protobuf-java.version>
+        <protobuf-java.version>4.36.0</protobuf-java.version>
     </properties>
 
     <dependencyManagement>
